@@ -337,6 +337,8 @@ const EMPTY_VALUE_OPERATORS = [
   'this_week',
 ];
 
+const ID_OPERATORS = ['equals', 'does_not_equal', 'greater_than'];
+
 /**
  * Convert AST to Notion API filter format
  * @param {Object} ast - Abstract syntax tree
@@ -369,6 +371,11 @@ function convertSingleFilter(filterNode, propertySchema) {
   // Special handling for timestamp properties
   if (property === 'created_time' || property === 'last_edited_time') {
     return convertTimestampFilter(property, operator, value);
+  }
+
+  // Special handling for page id
+  if (property === 'id') {
+    return convertIdFilter(operator, value);
   }
 
   // Get property type from schema
@@ -514,6 +521,7 @@ function parseFilter(filterString, propertySchema) {
   // Parse into AST
   const parser = new FilterParser(tokens);
   const ast = parser.parse();
+  validateNestingDepth(ast);
 
   // Convert AST to Notion API format
   const notionFilter = astToNotionFilter(ast, propertySchema);
@@ -528,15 +536,38 @@ function parseFilter(filterString, propertySchema) {
  * @throws {Error} If nesting exceeds maximum depth
  */
 function validateNestingDepth(ast, currentDepth = 0) {
+  if (ast.type !== 'and' && ast.type !== 'or') {
+    return;
+  }
+
   if (currentDepth > 2) {
     throw new Error('Filter nesting exceeds maximum depth of 2 levels');
   }
 
-  if (ast.type === 'and' || ast.type === 'or') {
-    for (const filter of ast.filters) {
-      validateNestingDepth(filter, currentDepth + 1);
-    }
+  for (const filter of ast.filters) {
+    validateNestingDepth(filter, currentDepth + 1);
   }
+}
+
+/**
+ * Convert page id filter to Notion API format
+ * @param {string} operator - Filter operator
+ * @param {string} value - Raw id value
+ * @returns {Object} Notion API id filter object
+ */
+function convertIdFilter(operator, value) {
+  if (!ID_OPERATORS.includes(operator)) {
+    throw new Error(
+      `Operator "${operator}" is not valid for property "id". Valid operators: ${ID_OPERATORS.join(', ')}`
+    );
+  }
+
+  return {
+    property: 'id',
+    id: {
+      [operator]: normalizeNotionId(value) || value,
+    },
+  };
 }
 
 module.exports = {
