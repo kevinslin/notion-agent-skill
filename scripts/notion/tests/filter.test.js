@@ -499,8 +499,13 @@ describe('Filter Parser', () => {
               {
                 type: 'and',
                 filters: [
-                  { type: 'filter', property: 'A', operator: 'equals', value: '1' },
-                  { type: 'filter', property: 'B', operator: 'equals', value: '2' },
+                  {
+                    type: 'or',
+                    filters: [
+                      { type: 'filter', property: 'A', operator: 'equals', value: '1' },
+                      { type: 'filter', property: 'B', operator: 'equals', value: '2' },
+                    ],
+                  },
                 ],
               },
             ],
