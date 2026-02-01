@@ -82,6 +82,31 @@ node notion.js fetch --database-name "Tasks" --query "urgent"
 node notion.js fetch --database-id <db-id> --filters "Status:equals:Done" --output md
 ```
 
+Output (JSON):
+
+```json
+[
+  {
+    "id": "2ca611ce-280d-816c-bf96-c02313ad2d4f",
+    "title": "Example title",
+    "properties": {
+      "Status": "Not started",
+      "Tags": ["urgent"]
+    },
+    "body": "Example body text"
+  }
+]
+```
+
+Output (Markdown):
+
+```md
+# Example title
+- properties: {"Status":"Not started","Tags":["urgent"]}
+
+Example body text
+```
+
 ### `sync-meta`
 
 Sync database metadata and cache it locally.

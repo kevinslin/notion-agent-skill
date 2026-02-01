@@ -2,7 +2,7 @@ const { Client } = require('@notionhq/client');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { loadEnv, coerceValueForPropertyType, markdownToParagraphBlocks } = require('../utils');
+const { loadEnv, coerceValueForPropertyType, markdownToParagraphBlocks, normalizeNotionId } = require('../utils');
 
 const execFileAsync = promisify(execFile);
 
@@ -32,7 +32,8 @@ describe('Fetch Command Integration Tests', () => {
 
     client = new Client({ auth: token });
 
-    testDatabaseId = process.env.TEST_DATABASE_ID;
+    const rawTestDatabaseId = process.env.TEST_DATABASE_ID;
+    testDatabaseId = normalizeNotionId(rawTestDatabaseId) || rawTestDatabaseId;
     if (!testDatabaseId) {
       throw new Error('TEST_DATABASE_ID not set in .env.test');
     }
@@ -62,6 +63,15 @@ describe('Fetch Command Integration Tests', () => {
     // Give Notion time to index the page for queries
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }, 20000);
+
+  afterAll(async () => {
+    if (!testPageId) return;
+    try {
+      await client.pages.update({ page_id: testPageId, archived: true });
+    } catch (err) {
+      // Best-effort cleanup; don't fail tests on cleanup issues.
+    }
+  });
 
   async function runFetch(args) {
     const scriptPath = path.join(__dirname, '..', 'notion.js');
