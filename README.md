@@ -47,6 +47,9 @@ node notion.js create --database-id <db-id> --properties Name="Daily note" --pro
 # Sync metadata cache
 node notion.js sync-meta
 
+# Fetch pages from a database
+node notion.js fetch --database-id <db-id> --query "urgent" --output md
+
 # Sync notes using rules
 node notion.js sync --dry-run
 ```

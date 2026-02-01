@@ -23,6 +23,7 @@ const syncMetaCommand = require('./commands/sync-meta');
 const syncCommand = require('./commands/sync');
 const parseBlockCommand = require('./commands/parse-block');
 const statusCommand = require('./commands/status');
+const fetchCommand = require('./commands/fetch');
 
 // Build CLI
 yargs(hideBin(process.argv))
@@ -32,6 +33,7 @@ yargs(hideBin(process.argv))
   .command(syncCommand)
   .command(parseBlockCommand)
   .command(statusCommand)
+  .command(fetchCommand)
   .demandCommand(1, 'You must specify a command')
   .help()
   .alias('help', 'h')
