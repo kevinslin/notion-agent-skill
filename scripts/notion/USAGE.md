@@ -78,13 +78,14 @@ node notion.js sync-meta --env test --limit 10
 
 ### `sync`
 
-Sync local notes to Notion using rule files in `syncRules/`.
+Sync local notes to Notion using YAML rule files in `~/.notion-agents-skill/syncRules/`.
 
 Options:
 
 - `--rule`: Run a specific rule (matches rule filename or `name` field).
 - `--path`: Additional file or directory paths to scan (repeatable).
 - `--dry-run`: Print planned actions without writing changes.
+- `--rules-dir`: Directory containing `.yaml`/`.yml` rule files (defaults to `~/.notion-agents-skill/syncRules`).
 - positional `path`: Provide a single file or directory after `sync` to only sync that target.
 
 Notes:
@@ -101,6 +102,7 @@ node notion.js sync
 node notion.js sync ./notes/task.2025.12.28.finalize-trip.md
 node notion.js sync --dry-run
 node notion.js sync --rule task
+node notion.js sync --rules-dir ./syncRules
 node notion.js sync --path ../notes-archive
 ```
 

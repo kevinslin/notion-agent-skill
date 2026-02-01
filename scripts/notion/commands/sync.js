@@ -1,6 +1,8 @@
 const { Client } = require('@notionhq/client');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const yaml = require('js-yaml');
 const {
   coerceValueForPropertyType,
   markdownToParagraphBlocks,
@@ -18,13 +20,30 @@ const {
 
 const NOTION_ONLY_LABEL = 'NOTION_ONLY';
 const DEFAULT_IGNORE_DIRS = new Set(['node_modules', '.git', 'syncRules']);
+const DEFAULT_RULES_DIR = path.join(os.homedir(), '.notion-agents-skill', 'syncRules');
+
+function resolveRulesDir(rulesDir) {
+  if (!rulesDir) {
+    return DEFAULT_RULES_DIR;
+  }
+
+  if (rulesDir === '~') {
+    return os.homedir();
+  }
+
+  if (rulesDir.startsWith('~/')) {
+    return path.join(os.homedir(), rulesDir.slice(2));
+  }
+
+  return path.resolve(process.cwd(), rulesDir);
+}
 
 function loadSyncRules(rulesDir) {
   ensureDirectoryExists(rulesDir);
 
   const ruleFiles = fs
     .readdirSync(rulesDir)
-    .filter((file) => file.endsWith('.js') && !file.startsWith('.'))
+    .filter((file) => !file.startsWith('.') && (file.endsWith('.yaml') || file.endsWith('.yml')))
     .sort();
 
   if (!ruleFiles.length) {
@@ -35,9 +54,13 @@ function loadSyncRules(rulesDir) {
 
   for (const file of ruleFiles) {
     const fullPath = path.join(rulesDir, file);
-    // eslint-disable-next-line global-require, import/no-dynamic-require
-    const moduleExport = require(fullPath);
-    let rawRules = moduleExport && moduleExport.default ? moduleExport.default : moduleExport;
+    let rawRules;
+
+    try {
+      rawRules = yaml.load(fs.readFileSync(fullPath, 'utf8'));
+    } catch (err) {
+      throw new Error(`Invalid YAML in ${file}: ${err.message || err}`);
+    }
 
     if (rawRules && Array.isArray(rawRules.rules)) {
       rawRules = rawRules.rules;
@@ -70,7 +93,7 @@ function loadSyncRules(rulesDir) {
         ...rawRule,
         fnameTrigger,
         fmToSync,
-        ruleName: rawRule.name || path.basename(file, '.js'),
+        ruleName: rawRule.name || path.basename(file, path.extname(file)),
       });
     }
   }
@@ -423,9 +446,14 @@ module.exports = {
         describe: 'Additional file or directory paths to scan for notes',
         default: [],
       })
+      .option('rules-dir', {
+        type: 'string',
+        describe: 'Directory containing sync rule YAML files',
+      })
       .example('$0 sync')
       .example('$0 sync ./notes/task.2025.12.28.finalize-trip.md')
       .example('$0 sync --rule task')
+      .example('$0 sync --rules-dir ./syncRules')
       .example('$0 sync --path ../notes-archive');
   },
 
@@ -440,14 +468,20 @@ module.exports = {
     };
 
     try {
-      const { rule: ruleFilter, path: extraPaths, target, dryRun } = argv;
+      const {
+        rule: ruleFilter,
+        path: extraPaths,
+        target,
+        dryRun,
+        rulesDir: rulesDirInput,
+      } = argv;
 
       const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
       if (!token) {
         throw new Error('NOTION_TOKEN (or NOTION_API_KEY) is required. Set it in the environment or .env file.');
       }
 
-      const rulesDir = path.resolve(process.cwd(), 'syncRules');
+      const rulesDir = resolveRulesDir(rulesDirInput);
       const allRules = loadSyncRules(rulesDir);
 
       const rules = ruleFilter

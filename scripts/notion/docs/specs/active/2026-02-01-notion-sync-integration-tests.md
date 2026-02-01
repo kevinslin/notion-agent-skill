@@ -18,13 +18,13 @@ The sync command is implemented and unit-tested, but integration coverage is mis
 
 ### Current State
 - Integration tests live under `scripts/notion/integ` and use `.env.test` for credentials.
-- `notion sync` reads `syncRules/` and scans `notes/` by default.
+- `notion sync` reads `~/.notion-agents-skill/syncRules/` (YAML) and scans `notes/` by default.
 - Test database setup script does not yet enforce sync-required properties (`dendron_id`, `last_synced`).
 
 ### Constraints
 - CommonJS Node project using Jest.
 - Integration tests must hit the real Notion API and use the test workspace.
-- CLI uses `process.cwd()` to locate `syncRules` and notes.
+- CLI uses `~/.notion-agents-skill/syncRules` for rules and `process.cwd()` to locate notes (override rules with `--rules-dir`).
 
 ---
 
@@ -32,7 +32,7 @@ The sync command is implemented and unit-tested, but integration coverage is mis
 
 ### Architecture/Design
 - Add `integ/sync.test.js` that:
-  - Creates a temporary workspace with `syncRules/` and `notes/`.
+  - Creates a temporary workspace with `syncRules/` and `notes/`, then points the CLI at the temp rules via `--rules-dir`.
   - Runs `node notion.js sync` via `child_process` with `cwd` pointing at the temp workspace.
   - Verifies updated frontmatter (`notion_url`, `last_synced`) and that pages exist in Notion.
 

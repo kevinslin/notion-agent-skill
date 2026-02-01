@@ -51,24 +51,24 @@ describe('Sync Command Integration Tests', () => {
     fs.mkdirSync(syncRulesDir, { recursive: true });
     fs.mkdirSync(notesDir, { recursive: true });
 
-    const ruleContent = `module.exports = {
-  fnameTrigger: 'task.*',
-  fmToSync: [
-    { name: 'title', target: 'Name' },
-    { name: 'proj', target: 'Tags', mode: 'append' },
-  ],
-  destination: {
-    databaseId: '${testDatabaseId}',
-  },
-};\n`;
+    const ruleContent = `fnameTrigger: "task.*"
+fmToSync:
+  - name: title
+    target: Name
+  - name: proj
+    target: Tags
+    mode: append
+destination:
+  databaseId: "${testDatabaseId}"
+`;
 
-    fs.writeFileSync(path.join(syncRulesDir, 'task.js'), ruleContent, 'utf8');
+    fs.writeFileSync(path.join(syncRulesDir, 'task.yaml'), ruleContent, 'utf8');
 
     const cleanup = () => {
       fs.rmSync(root, { recursive: true, force: true });
     };
 
-    return { root, notesDir, cleanup };
+    return { root, notesDir, syncRulesDir, cleanup };
   };
 
   const writeNote = ({ notesDir, fname, title, proj, body }) => {
@@ -85,8 +85,14 @@ describe('Sync Command Integration Tests', () => {
     return filePath;
   };
 
-  const runSyncCommand = ({ cwd, args = [] }) => {
-    const result = spawnSync('node', [notionCliPath, 'sync', ...args], {
+  const runSyncCommand = ({ cwd, args = [], rulesDir }) => {
+    const cliArgs = ['sync'];
+    if (rulesDir) {
+      cliArgs.push('--rules-dir', rulesDir);
+    }
+    cliArgs.push(...args);
+
+    const result = spawnSync('node', [notionCliPath, ...cliArgs], {
       cwd,
       env: { ...process.env },
       encoding: 'utf8',
@@ -139,7 +145,7 @@ describe('Sync Command Integration Tests', () => {
         body: 'Integration test body for sync one.',
       });
 
-      const stdout = runSyncCommand({ cwd: workspace.root, args: [notePath] });
+      const stdout = runSyncCommand({ cwd: workspace.root, args: [notePath], rulesDir: workspace.syncRulesDir });
       expect(stdout).toMatch(/Sync complete/);
 
       const parsed = readFrontmatter(notePath);
@@ -173,7 +179,7 @@ describe('Sync Command Integration Tests', () => {
         body: 'Integration test body for sync all B.',
       });
 
-      const stdout = runSyncCommand({ cwd: workspace.root });
+      const stdout = runSyncCommand({ cwd: workspace.root, rulesDir: workspace.syncRulesDir });
       expect(stdout).toMatch(/Sync complete/);
 
       const parsedA = readFrontmatter(noteA);

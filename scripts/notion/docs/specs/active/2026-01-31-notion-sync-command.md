@@ -32,7 +32,7 @@ The CLI currently supports `create`, `list-db`, `sync-meta`, `parse-block`, and 
 
 ### Architecture/Design
 - Add `commands/sync.js` with a rule-based sync pipeline:
-  1) Load rules from `syncRules/*.js`.
+  1) Load rules from `~/.notion-agents-skill/syncRules/*.yaml` (or `.yml`).
   2) Discover note files (default to `notes/` if present, else `cwd`).
   3) Parse YAML frontmatter + body.
   4) Match notes to rules via `fnameTrigger` wildcard.
@@ -62,7 +62,7 @@ The CLI currently supports `create`, `list-db`, `sync-meta`, `parse-block`, and 
 ## Steps
 
 ### Phase 1: Rule Loading + Note Discovery
-- [x] Add `syncRules/` directory and rule loader (supports single rule or array export, derives rule name from filename).
+- [x] Add YAML rule loader (supports single rule or array export, derives rule name from filename).
 - [x] Implement note discovery (scan `notes/` if present, else `cwd`, ignoring `node_modules`, `.git`).
 - [x] Implement frontmatter parser/serializer (YAML block + body extraction, round-trip updates).
 
