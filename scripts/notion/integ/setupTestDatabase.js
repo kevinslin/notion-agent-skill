@@ -102,6 +102,14 @@ const REQUIRED_PROPERTIES = {
     type: 'rich_text',
     rich_text: {},
   },
+  dendron_id: {
+    type: 'rich_text',
+    rich_text: {},
+  },
+  last_synced: {
+    type: 'date',
+    date: {},
+  },
 };
 
 async function setupTestDatabase() {

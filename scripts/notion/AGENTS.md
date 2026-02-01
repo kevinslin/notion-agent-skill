@@ -185,6 +185,8 @@ The test database (specified by `TEST_DATABASE_ID` in `.env.test`) must have the
 | Category | select | Filter tests | Used for select filter tests |
 | Date | date | Filter tests | Used for date filter tests |
 | Description | rich_text | Optional | Used for rich text filter tests |
+| dendron_id | rich_text | Sync tests | Required for `notion sync` integration tests |
+| last_synced | date | Sync tests | Required for `notion sync` integration tests |
 
 **Setup Helper**: Run `node integ/setupTestDatabase.js` to automatically configure your test database with all required properties.
 

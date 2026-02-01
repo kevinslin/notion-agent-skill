@@ -76,7 +76,7 @@ The CLI currently supports `create`, `list-db`, `sync-meta`, `parse-block`, and 
 ### Phase 3: CLI + Docs + Tests
 - [x] Add `sync` command to `notion.js` and update `USAGE.md` with usage + examples.
 - [x] Add unit tests for frontmatter parsing, rule matching, and property merge helpers.
-- [ ] Validate behavior manually or via integration tests if Notion credentials are available.
+- [x] Validate behavior manually or via integration tests if Notion credentials are available.
 
 **Dependencies between phases:**
 - Phase 2 depends on Phase 1 utilities.
