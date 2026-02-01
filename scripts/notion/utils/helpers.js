@@ -18,29 +18,52 @@ function loadEnv(startDir = process.cwd()) {
   const isTest = process.env.NODE_ENV === 'test';
   const envFileName = isTest ? '.env.test' : '.env';
 
+  let kevinGardenDir = null;
+
   // Traverse up until we find kevin-garden directory
   while (currentDir !== root) {
-    if (currentDir === homeDir) {
-      const envPath = path.join(currentDir, envFileName);
-      if (fs.existsSync(envPath)) {
-        const result = dotenv.config({ path: envPath, override: true });
-        if (result.error) {
-          throw new Error(`Error loading ${envFileName} from ${envPath}: ${result.error.message}`);
-        }
-
-        const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
-        if (!token) {
-          throw new Error(`NOTION_TOKEN (or NOTION_API_KEY) is required but not set in ${envFileName} file`);
-        }
-        return token;
-      } else {
-        throw new Error(`Found kevin-garden directory at ${currentDir} but ${envFileName} file does not exist`);
-      }
+    if (path.basename(currentDir) === 'kevin-garden') {
+      kevinGardenDir = currentDir;
+      break;
     }
     currentDir = path.dirname(currentDir);
   }
 
-  throw new Error('did not find home directory when starting from ' + startDir);
+  if (kevinGardenDir) {
+    const envPath = path.join(kevinGardenDir, envFileName);
+    if (fs.existsSync(envPath)) {
+      const result = dotenv.config({ path: envPath, override: true });
+      if (result.error) {
+        throw new Error(`Error loading ${envFileName} from ${envPath}: ${result.error.message}`);
+      }
+
+      const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
+      if (!token) {
+        throw new Error(`NOTION_TOKEN (or NOTION_API_KEY) is required but not set in ${envFileName} file`);
+      }
+      return token;
+    }
+  }
+
+  const homeEnvPath = path.join(homeDir, envFileName);
+  if (fs.existsSync(homeEnvPath)) {
+    const result = dotenv.config({ path: homeEnvPath, override: true });
+    if (result.error) {
+      throw new Error(`Error loading ${envFileName} from ${homeEnvPath}: ${result.error.message}`);
+    }
+
+    const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
+    if (!token) {
+      throw new Error(`NOTION_TOKEN (or NOTION_API_KEY) is required but not set in ${envFileName} file`);
+    }
+    return token;
+  }
+
+  if (kevinGardenDir) {
+    throw new Error(`Found kevin-garden directory at ${kevinGardenDir} but ${envFileName} file does not exist`);
+  }
+
+  throw new Error(`did not find kevin-garden directory or ${envFileName} in home directory when starting from ${startDir}`);
 }
 
 /**

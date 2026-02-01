@@ -12,6 +12,9 @@ npm run test:unit
 # Run integration tests (uses .env.test for credentials)
 npm run test:integ
 
+# Integration tests load credentials via loadEnv (kevin-garden/.env.test if present, otherwise $HOME/.env.test)
+# Required: NOTION_TOKEN, TEST_DATABASE_ID
+
 # Run single test file
 npx jest --config jest.integ.config.js integ/create.test.js
 
@@ -71,16 +74,16 @@ Supported types:
 **Critical**: Each property type must match the database schema exactly. The create command fetches the database schema first to determine property types.
 
 ### Environment Loading Strategy
-`loadEnv()` (`utils/helpers.js:11-43`) traverses up from the current directory to find `kevin-garden/.env` or `.env.test`:
+`loadEnv()` (`utils/helpers.js:11-43`) traverses up from the current directory looking for a `kevin-garden` folder and loads `kevin-garden/.env` or `kevin-garden/.env.test` if found; otherwise it falls back to `$HOME/.env` or `$HOME/.env.test`:
 - Checks `NODE_ENV` environment variable
-  - If `NODE_ENV=test`, loads `kevin-garden/.env.test`
-  - Otherwise (including production), loads `kevin-garden/.env`
+  - If `NODE_ENV=test`, loads `.env.test`
+  - Otherwise (including production), loads `.env`
 - Starts at `process.cwd()`
-- Walks up until it finds a directory named `kevin-garden`
-- Loads the appropriate `.env` file from that directory
-- Falls back to standard dotenv if kevin-garden traversal fails
+- Walks up until it finds `kevin-garden`
+- Loads the appropriate `.env` file from `kevin-garden` if found
+- Falls back to `$HOME/.env` if `kevin-garden` is not present or lacks the env file
 
-**Critical**: This allows the CLI to work from any subdirectory within the kevin-garden workspace and automatically use the correct environment file for testing vs production.
+**Critical**: This allows the CLI to work from any subdirectory while preferring workspace-scoped env files and falling back to home-scoped credentials.
 
 ### Markdown Conversion
 `markdownToParagraphBlocks()` (`utils/helpers.js:142-158`) converts markdown to Notion paragraph blocks:
@@ -100,7 +103,7 @@ Supported types:
 
 **Integration Tests** (`integ/`):
 - Interact with real Notion API
-- Set `NODE_ENV=test` to automatically load credentials from `kevin-garden/.env.test`
+- Set `NODE_ENV=test` to automatically load credentials from `kevin-garden/.env.test` (or `$HOME/.env.test` fallback)
 - Require `TEST_DATABASE_ID` environment variable in `.env.test`
 - Create actual pages in Notion (not mocked)
 - Use snapshots for response validation (exclude dynamic fields like `id`)

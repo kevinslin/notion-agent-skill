@@ -193,7 +193,7 @@ describe('Sync Metadata Integration Tests', () => {
       // Verify content
       const cachedData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
       expect(cachedData).toEqual(metadata);
-    });
+    }, 15000);
 
     test('should write valid JSON', async () => {
       const metadata = await syncDatabaseMetadata({ client, limit: 1 });
@@ -205,6 +205,6 @@ describe('Sync Metadata Integration Tests', () => {
       expect(() => {
         JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
       }).not.toThrow();
-    });
+    }, 15000);
   });
 });

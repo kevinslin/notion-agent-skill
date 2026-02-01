@@ -60,6 +60,53 @@ node notion.js list-db
 node notion.js list-db --limit 10 --format table
 ```
 
+### `fetch`
+
+Fetch pages from a Notion database.
+
+Options:
+
+- `--database-id`: Database ID to fetch from (required if no name is provided).
+- `--database-name`: Database name to fetch from (uses cache if available).
+- `--query`: Wildtext query applied to the title property (uses `contains`).
+- `--filter` / `--filters`: Filter string using the filter syntax.
+- `--output`: Output format: `json` (default) or `md`.
+- `--limit`: Maximum number of pages to return (default: all).
+- `--env`: `production` or `test` (controls cache filename).
+
+Examples:
+
+```bash
+node notion.js fetch --database-id <db-id>
+node notion.js fetch --database-name "Tasks" --query "urgent"
+node notion.js fetch --database-id <db-id> --filters "Status:equals:Done" --output md
+```
+
+Output (JSON):
+
+```json
+[
+  {
+    "id": "2ca611ce-280d-816c-bf96-c02313ad2d4f",
+    "title": "Example title",
+    "properties": {
+      "Status": "Not started",
+      "Tags": ["urgent"]
+    },
+    "body": "Example body text"
+  }
+]
+```
+
+Output (Markdown):
+
+```md
+# Example title
+- properties: {"Status":"Not started","Tags":["urgent"]}
+
+Example body text
+```
+
 ### `sync-meta`
 
 Sync database metadata and cache it locally.
