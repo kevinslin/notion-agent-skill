@@ -1,7 +1,7 @@
 # Execution Plan: Support Relation Fields in Sync
 
 **Date:** 2026-02-01
-**Status:** In Progress
+**Status:** Completed
 
 ---
 
@@ -128,11 +128,11 @@ Sync rules currently only support relation properties by providing Notion page I
 
 ## Success Criteria
 
-- [ ] `notion sync` resolves relation values by name when configured.
-- [ ] Missing relation targets are created unless `errorIfNotFound` is true.
-- [ ] Existing relation-by-ID behavior still works.
-- [ ] Documentation updated.
-- [ ] Tests pass or are documented if skipped.
+- [x] `notion sync` resolves relation values by name when configured.
+- [x] Missing relation targets are created unless `errorIfNotFound` is true.
+- [x] Existing relation-by-ID behavior still works.
+- [x] Documentation updated.
+- [x] Tests pass or are documented if skipped.
 
 ---
 
