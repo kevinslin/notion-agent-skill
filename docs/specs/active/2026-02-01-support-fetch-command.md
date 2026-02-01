@@ -84,7 +84,7 @@ Issue #5 requests a `fetch` command with query + filter support and multiple out
   - `body` (flattened text from block children)
 - [x] Support JSON output (array of page objects).
 - [x] Support Markdown output (one entry per page, separated by `---`):
-  ```
+  ```md
   # Title
   - properties: { ... }
 
@@ -130,7 +130,7 @@ Issue #5 requests a `fetch` command with query + filter support and multiple out
 ## Risks & Mitigations
 
 | Risk | Impact | Probability | Mitigation Strategy |
-|------|--------|-------------|---------------------|
+| ------ | ------ | ------------- | --------------------- |
 | DB name lookup ambiguous or cache missing | Med | Med | Fallback to API list; error with available matches |
 | Block rendering incomplete for complex blocks | Low | Med | Document limitations; implement basic rich_text extraction |
 | Filter + query combined incorrectly | Med | Low | Add explicit `and` combine logic + tests |

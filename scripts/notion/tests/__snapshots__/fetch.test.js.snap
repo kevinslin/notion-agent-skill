@@ -1,0 +1,81 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`fetch helpers block formatting formats common blocks 1`] = `
+{
+  "code": "\`\`\`javascript
+console.log(1);
+\`\`\`",
+  "heading": "## Title",
+  "paragraph": "Hello",
+  "todo": "- [x] Do it",
+}
+`;
+
+exports[`fetch helpers block formatting joins blocks into body 1`] = `
+"Line 1
+Line 2"
+`;
+
+exports[`fetch helpers filter composition combines query with AND filter without increasing depth 1`] = `
+{
+  "combined": {
+    "and": [
+      {
+        "property": "Status",
+        "status": {
+          "equals": "Done",
+        },
+      },
+      {
+        "property": "Name",
+        "title": {
+          "contains": "urgent",
+        },
+      },
+    ],
+  },
+  "depth": 1,
+}
+`;
+
+exports[`fetch helpers simplifyProperties excludes title property 1`] = `
+{
+  "Status": "Done",
+}
+`;
+
+exports[`fetch helpers simplifyPropertyValue handles dates 1`] = `
+{
+  "date": "2026-02-01",
+  "dateRange": {
+    "end": "2026-02-02",
+    "start": "2026-02-01",
+  },
+}
+`;
+
+exports[`fetch helpers simplifyPropertyValue handles files 1`] = `
+[
+  {
+    "name": "spec.pdf",
+    "url": "https://example.com/spec.pdf",
+  },
+]
+`;
+
+exports[`fetch helpers simplifyPropertyValue handles select and multi_select 1`] = `
+{
+  "multiSelect": [
+    "A",
+    "B",
+  ],
+  "select": "High",
+}
+`;
+
+exports[`fetch helpers simplifyPropertyValue handles title and rich_text 1`] = `
+{
+  "rich": "World",
+  "title": "Hello",
+}
+`;

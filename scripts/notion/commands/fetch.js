@@ -2,7 +2,7 @@ const { Client } = require('@notionhq/client');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseFilter } = require('../utils');
+const { parseFilter, loadEnv, normalizeNotionId } = require('../utils');
 const { listDatabases } = require('./list-db');
 
 function getCacheFilePath(env) {
@@ -55,9 +55,13 @@ function formatMatchList(matches) {
     .join(', ');
 }
 
+function normalizeDatabaseId(id) {
+  return normalizeNotionId(id) || id;
+}
+
 async function resolveDatabaseId({ client, databaseId, databaseName, env }) {
   if (databaseId) {
-    return { id: databaseId, title: null };
+    return { id: normalizeDatabaseId(databaseId), title: null };
   }
 
   if (!databaseName) {
@@ -69,7 +73,7 @@ async function resolveDatabaseId({ client, databaseId, databaseName, env }) {
 
   if (cacheMatches && cacheMatches.matches.length === 1) {
     return {
-      id: cacheMatches.matches[0].id,
+      id: normalizeDatabaseId(cacheMatches.matches[0].id),
       title: cacheMatches.matches[0].title,
     };
   }
@@ -86,7 +90,7 @@ async function resolveDatabaseId({ client, databaseId, databaseName, env }) {
 
   if (apiMatches.matches.length === 1) {
     return {
-      id: apiMatches.matches[0].id,
+      id: normalizeDatabaseId(apiMatches.matches[0].id),
       title: apiMatches.matches[0].title,
     };
   }
@@ -470,6 +474,16 @@ module.exports = {
         limit,
         env,
       } = argv;
+
+      try {
+        loadEnv();
+      } catch (err) {
+        try {
+          require('dotenv').config();
+        } catch (dotenvErr) {
+          // Ignore, will fail below if NOTION_TOKEN is not set
+        }
+      }
 
       const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
       if (!token) {

@@ -78,6 +78,14 @@ describe('Fetch Command Integration Tests', () => {
     return stdout.trim();
   }
 
+  function normalizeMarkdown(output) {
+    return output
+      .replaceAll(testTitle, '<TITLE>')
+      .replaceAll(testPageId, '<ID>')
+      .replace(/https?:\/\/\\S+/g, '<URL>')
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<UUID>');
+  }
+
   test('fetches pages by query (json)', async () => {
     const stdout = await runFetch([
       '--database-id',
@@ -89,11 +97,14 @@ describe('Fetch Command Integration Tests', () => {
     ]);
 
     const results = JSON.parse(stdout);
-    const match = results.find((page) => page.id === testPageId);
+    const matches = results.filter((page) => page.id === testPageId);
+    expect(matches).toHaveLength(1);
 
-    expect(match).toBeDefined();
-    expect(match.title).toBe(testTitle);
-    expect(match.body).toContain(testBodyLine);
+    const normalized = matches.map(({ id, title, ...rest }) => ({
+      ...rest,
+      title: '<TITLE>',
+    }));
+    expect(normalized).toMatchSnapshot();
   }, 20000);
 
   test('renders markdown output', async () => {
@@ -108,8 +119,7 @@ describe('Fetch Command Integration Tests', () => {
       '5',
     ]);
 
-    expect(stdout).toContain(`# ${testTitle}`);
-    expect(stdout).toContain(testBodyLine);
-    expect(stdout).toContain('- properties:');
+    const normalized = normalizeMarkdown(stdout);
+    expect(normalized).toMatchSnapshot();
   }, 20000);
 });

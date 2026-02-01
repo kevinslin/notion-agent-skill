@@ -19,8 +19,12 @@ describe('fetch helpers', () => {
         rich_text: [{ plain_text: 'World' }],
       };
 
-      expect(simplifyPropertyValue(titleProp)).toBe('Hello');
-      expect(simplifyPropertyValue(richProp)).toBe('World');
+      const result = {
+        title: simplifyPropertyValue(titleProp),
+        rich: simplifyPropertyValue(richProp),
+      };
+
+      expect(result).toMatchSnapshot();
     });
 
     test('handles select and multi_select', () => {
@@ -33,8 +37,12 @@ describe('fetch helpers', () => {
         multi_select: [{ name: 'A' }, { name: 'B' }],
       };
 
-      expect(simplifyPropertyValue(selectProp)).toBe('High');
-      expect(simplifyPropertyValue(multiSelectProp)).toEqual(['A', 'B']);
+      const result = {
+        select: simplifyPropertyValue(selectProp),
+        multiSelect: simplifyPropertyValue(multiSelectProp),
+      };
+
+      expect(result).toMatchSnapshot();
     });
 
     test('handles dates', () => {
@@ -47,11 +55,12 @@ describe('fetch helpers', () => {
         date: { start: '2026-02-01', end: '2026-02-02' },
       };
 
-      expect(simplifyPropertyValue(dateProp)).toBe('2026-02-01');
-      expect(simplifyPropertyValue(dateRangeProp)).toEqual({
-        start: '2026-02-01',
-        end: '2026-02-02',
-      });
+      const result = {
+        date: simplifyPropertyValue(dateProp),
+        dateRange: simplifyPropertyValue(dateRangeProp),
+      };
+
+      expect(result).toMatchSnapshot();
     });
 
     test('handles files', () => {
@@ -66,9 +75,9 @@ describe('fetch helpers', () => {
         ],
       };
 
-      expect(simplifyPropertyValue(filesProp)).toEqual([
-        { name: 'spec.pdf', url: 'https://example.com/spec.pdf' },
-      ]);
+      const result = simplifyPropertyValue(filesProp);
+
+      expect(result).toMatchSnapshot();
     });
   });
 
@@ -79,9 +88,9 @@ describe('fetch helpers', () => {
         Status: { type: 'select', select: { name: 'Done' } },
       };
 
-      expect(simplifyProperties(props, 'Name')).toEqual({
-        Status: 'Done',
-      });
+      const result = simplifyProperties(props, 'Name');
+
+      expect(result).toMatchSnapshot();
     });
   });
 
@@ -107,10 +116,14 @@ describe('fetch helpers', () => {
         },
       };
 
-      expect(blockToMarkdown(paragraph)).toBe('Hello');
-      expect(blockToMarkdown(heading)).toBe('## Title');
-      expect(blockToMarkdown(todo)).toBe('- [x] Do it');
-      expect(blockToMarkdown(code)).toBe('```javascript\nconsole.log(1);\n```');
+      const result = {
+        paragraph: blockToMarkdown(paragraph),
+        heading: blockToMarkdown(heading),
+        todo: blockToMarkdown(todo),
+        code: blockToMarkdown(code),
+      };
+
+      expect(result).toMatchSnapshot();
     });
 
     test('joins blocks into body', () => {
@@ -125,7 +138,9 @@ describe('fetch helpers', () => {
         },
       ];
 
-      expect(blocksToBody(blocks)).toBe('Line 1\nLine 2');
+      const result = blocksToBody(blocks);
+
+      expect(result).toMatchSnapshot();
     });
   });
 
@@ -142,13 +157,12 @@ describe('fetch helpers', () => {
       };
 
       const combined = combineFilters(queryFilter, parsedFilter);
-      expect(combined).toEqual({
-        and: [
-          { property: 'Status', status: { equals: 'Done' } },
-          { property: 'Name', title: { contains: 'urgent' } },
-        ],
-      });
-      expect(getFilterDepth(combined)).toBe(1);
+      const result = {
+        combined,
+        depth: getFilterDepth(combined),
+      };
+
+      expect(result).toMatchSnapshot();
     });
   });
 });

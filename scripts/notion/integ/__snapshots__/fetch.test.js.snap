@@ -1,0 +1,28 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Fetch Command Integration Tests fetches pages by query (json) 1`] = `
+[
+  {
+    "body": "Fetch integration body line",
+    "properties": {
+      "Category": null,
+      "Date": null,
+      "Description": "",
+      "Done": false,
+      "Priority": null,
+      "Status": "Not started",
+      "Tags": [],
+      "dendron_id": "",
+      "last_synced": null,
+    },
+    "title": "<TITLE>",
+  },
+]
+`;
+
+exports[`Fetch Command Integration Tests renders markdown output 1`] = `
+"# <TITLE>
+- properties: {"dendron_id":"","Category":null,"Status":"Not started","Date":null,"Priority":null,"Description":"","Tags":[],"last_synced":null,"Done":false}
+
+Fetch integration body line"
+`;
