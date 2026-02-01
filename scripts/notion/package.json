@@ -1,0 +1,31 @@
+{
+  "name": "notion-agent-skill",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "notion": "./notion.js"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/integ",
+      "<rootDir>/tests"
+    ],
+    "testRegex": "(/__tests__/.*|(\\.|/)(test|spec))\\.c?js$",
+    "verbose": true
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "dotenv": "^16.4.5",
+    "js-yaml": "^4.1.0",
+    "short-uuid": "^5.0.0",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
