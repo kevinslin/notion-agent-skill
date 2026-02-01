@@ -7,16 +7,9 @@
     "notion": "./notion.js"
   },
   "scripts": {
-    "test": "jest"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "roots": [
-      "<rootDir>/integ",
-      "<rootDir>/tests"
-    ],
-    "testRegex": "(/__tests__/.*|(\\.|/)(test|spec))\\.c?js$",
-    "verbose": true
+    "test": "jest --config jest.unit.config.js",
+    "test:unit": "jest --config jest.unit.config.js",
+    "test:integ": "jest --config jest.integ.config.js"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.15",

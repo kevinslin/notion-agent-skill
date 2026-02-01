@@ -6,17 +6,20 @@ This is a CLI for working with notion
 
 ### Development
 ```bash
-# Run tests (uses .env.test for credentials)
-npm test
+# Run unit tests
+npm run test:unit
+
+# Run integration tests (uses .env.test for credentials)
+npm run test:integ
 
 # Run single test file
-npx jest integ/create.test.js
+npx jest --config jest.integ.config.js integ/create.test.js
 
 # Run specific test
-npx jest integ/create.test.js -t "should create a page with title property"
+npx jest --config jest.integ.config.js integ/create.test.js -t "should create a page with title property"
 
 # Update snapshots
-npx jest -u
+npx jest --config jest.unit.config.js -u
 ```
 
 ### Running the CLI
@@ -210,24 +213,27 @@ node integ/setupTestDatabase.js
 
 ### Running Tests
 ```bash
-# All tests (unit + integration)
-npm test
+# Unit tests (default)
+npm run test:unit
+
+# Integration tests (requires DB access)
+npm run test:integ
 
 # Only unit tests (fast, no DB calls)
-npx jest tests/
+npx jest --config jest.unit.config.js tests/
 
 # Only integration tests (requires DB access)
-npx jest integ/
+npx jest --config jest.integ.config.js integ/
 
 # Single test file
-npx jest integ/create.test.js
-npx jest tests/filter.test.js
+npx jest --config jest.integ.config.js integ/create.test.js
+npx jest --config jest.unit.config.js tests/filter.test.js
 
 # Watch mode
-npx jest --watch
+npx jest --config jest.unit.config.js --watch
 
 # Update snapshots
-npx jest -u
+npx jest --config jest.unit.config.js -u
 ```
 
 ## Common Gotchas
