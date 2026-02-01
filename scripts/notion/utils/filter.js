@@ -549,6 +549,12 @@ function validateNestingDepth(ast, currentDepth = 0) {
   }
 }
 
+/**
+ * Convert page id filter to Notion API format
+ * @param {string} operator - Filter operator
+ * @param {string} value - Raw id value
+ * @returns {Object} Notion API id filter object
+ */
 function convertIdFilter(operator, value) {
   if (!ID_OPERATORS.includes(operator)) {
     throw new Error(
