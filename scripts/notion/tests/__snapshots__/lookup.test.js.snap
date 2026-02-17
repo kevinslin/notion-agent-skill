@@ -1,0 +1,108 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`lookup helpers filter parsing normalizes object filters 1`] = `
+{
+  "dataSourceAlias": "database",
+  "database": "database",
+  "page": "page",
+}
+`;
+
+exports[`lookup helpers filter parsing parses valid filter expressions 1`] = `
+{
+  "database": {
+    "property": "object",
+    "value": "database",
+  },
+  "page": {
+    "property": "object",
+    "value": "page",
+  },
+}
+`;
+
+exports[`lookup helpers result normalization extracts page and database titles 1`] = `
+{
+  "databaseTitle": "Projects",
+  "pageTitle": "Roadmap item",
+}
+`;
+
+exports[`lookup helpers result normalization normalizes mixed search results 1`] = `
+[
+  {
+    "id": "page-id",
+    "last_edited_time": "2026-02-17T00:00:00.000Z",
+    "object": "page",
+    "parent": {
+      "type": "workspace",
+      "workspace": true,
+    },
+    "title": "Lookup page",
+    "url": "https://www.notion.so/page-id",
+  },
+  {
+    "id": "database-id",
+    "last_edited_time": "2026-02-16T00:00:00.000Z",
+    "object": "database",
+    "parent": {
+      "page_id": "parent-page",
+      "type": "page_id",
+    },
+    "title": "Lookup db",
+    "url": "https://www.notion.so/database-id",
+  },
+]
+`;
+
+exports[`lookup helpers result normalization summarizes parent references 1`] = `
+{
+  "database": {
+    "database_id": "db-1",
+    "type": "database_id",
+  },
+  "page": {
+    "page_id": "page-1",
+    "type": "page_id",
+  },
+  "workspace": {
+    "type": "workspace",
+    "workspace": true,
+  },
+}
+`;
+
+exports[`lookup helpers sort parsing normalizes sort directions 1`] = `
+{
+  "asc": "ascending",
+  "ascending": "ascending",
+  "desc": "descending",
+  "descending": "descending",
+}
+`;
+
+exports[`lookup helpers sort parsing parses valid lookup sort 1`] = `
+{
+  "long": {
+    "direction": "descending",
+    "timestamp": "last_edited_time",
+  },
+  "short": {
+    "direction": "ascending",
+    "timestamp": "last_edited_time",
+  },
+}
+`;
+
+exports[`lookup helpers table formatting formats tabular output 1`] = `
+"
+Results:
+
+1. Lookup page [page]
+   ID:   1
+   URL:  https://www.notion.so/1
+   Edit: 2026-02-17T00:00:00.000Z
+   Parent: workspace
+
+Total: 1 result(s)"
+`;

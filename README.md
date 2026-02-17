@@ -47,6 +47,9 @@ node notion.js create --database-id <db-id> --properties Name="Daily note" --pro
 # Sync metadata cache
 node notion.js sync-meta
 
+# Lookup pages/databases by query
+node notion.js lookup "project alpha" --filter object:page --sort last_edited_time:descending --limit 10
+
 # Fetch pages from a database
 node notion.js fetch --database-id <db-id> --query "urgent" --output md
 
