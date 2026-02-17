@@ -16,13 +16,6 @@ node notion.js list-db --limit 5 --format table
 ## Authentication
 
 - Set `NOTION_TOKEN` (or `NOTION_API_KEY`) in your environment or `.env`.
-- If you run inside a `kevin-garden` workspace, the CLI loads `kevin-garden/.env` by default and `kevin-garden/.env.test` when `NODE_ENV=test`.
-
-Example `.env`:
-
-```bash
-NOTION_TOKEN=secret_xxx
-```
 
 ## Commands
 
