@@ -17,6 +17,7 @@ const {
   ensureDirectoryExists,
   collectMarkdownFiles,
 } = require('../utils');
+const { resolveDatabaseId } = require('./fetch');
 
 const NOTION_ONLY_LABEL = 'NOTION_ONLY';
 const DEFAULT_IGNORE_DIRS = new Set(['node_modules', '.git', 'syncRules']);
@@ -128,6 +129,7 @@ async function getDatabaseSchema(client, cache, databaseId) {
 
   const db = await client.databases.retrieve({ database_id: databaseId });
   const propNameToType = {};
+  const relationDatabaseIdByProp = {};
   let titlePropName = null;
 
   for (const [propName, schema] of Object.entries(db.properties || {})) {
@@ -135,11 +137,180 @@ async function getDatabaseSchema(client, cache, databaseId) {
     if (schema.type === 'title' && !titlePropName) {
       titlePropName = propName;
     }
+    if (schema.type === 'relation' && schema.relation && schema.relation.database_id) {
+      relationDatabaseIdByProp[propName] = schema.relation.database_id;
+    }
   }
 
-  const schemaInfo = { propNameToType, titlePropName };
+  const schemaInfo = { propNameToType, titlePropName, relationDatabaseIdByProp };
   cache.set(databaseId, schemaInfo);
   return schemaInfo;
+}
+
+function normalizeRelationKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function resolveRelationDatabaseId({
+  client,
+  databaseId,
+  databaseName,
+  env,
+  databaseIdCache,
+}) {
+  if (databaseId) {
+    return normalizeNotionId(databaseId) || databaseId;
+  }
+
+  if (!databaseName) {
+    return null;
+  }
+
+  const cacheKey = normalizeRelationKey(databaseName);
+  if (databaseIdCache && databaseIdCache.has(cacheKey)) {
+    return databaseIdCache.get(cacheKey);
+  }
+
+  const resolved = await resolveDatabaseId({
+    client,
+    databaseId: null,
+    databaseName,
+    env,
+  });
+
+  if (databaseIdCache) {
+    databaseIdCache.set(cacheKey, resolved.id);
+  }
+
+  return resolved.id;
+}
+
+async function findPageByTitle({
+  client,
+  databaseId,
+  titlePropName,
+  title,
+}) {
+  const response = await client.databases.query({
+    database_id: databaseId,
+    filter: {
+      property: titlePropName,
+      title: { equals: title },
+    },
+    page_size: 2,
+  });
+
+  const results = response.results || [];
+  if (results.length > 1) {
+    throw new Error(`Multiple relation pages found for "${title}" in database ${databaseId}.`);
+  }
+
+  return results.length ? results[0].id : null;
+}
+
+async function ensureRelationPageId({
+  client,
+  databaseId,
+  titlePropName,
+  title,
+  errorIfNotFound,
+  allowCreate,
+}) {
+  const existingId = await findPageByTitle({
+    client,
+    databaseId,
+    titlePropName,
+    title,
+  });
+
+  if (existingId) {
+    return existingId;
+  }
+
+  if (errorIfNotFound) {
+    throw new Error(`Relation target "${title}" not found in database ${databaseId}.`);
+  }
+
+  if (!allowCreate) {
+    return null;
+  }
+
+  const created = await client.pages.create({
+    parent: { database_id: databaseId },
+    properties: {
+      [titlePropName]: coerceValueForPropertyType('title', title),
+    },
+  });
+
+  return created.id;
+}
+
+function buildRelationPropertyValue({ ids, mode, existingProperty }) {
+  const normalizedIds = (ids || [])
+    .map((id) => normalizeNotionId(id) || id)
+    .filter(Boolean);
+
+  if (!normalizedIds.length) {
+    return null;
+  }
+
+  if (mode === 'append' && existingProperty && Array.isArray(existingProperty.relation)) {
+    const existingIds = existingProperty.relation.map((item) => item.id);
+    const merged = mergeMultiSelectValues(existingIds, normalizedIds);
+    return { relation: merged.map((id) => ({ id })) };
+  }
+
+  return { relation: normalizedIds.map((id) => ({ id })) };
+}
+
+async function resolveRelationIds({
+  client,
+  schemaCache,
+  relationCache,
+  databaseId,
+  relationNames,
+  errorIfNotFound,
+  allowCreate,
+}) {
+  if (!relationNames.length) {
+    return [];
+  }
+
+  const relationSchema = await getDatabaseSchema(client, schemaCache, databaseId);
+  if (!relationSchema.titlePropName) {
+    throw new Error(`Relation database ${databaseId} is missing a title property.`);
+  }
+
+  const ids = [];
+
+  for (const name of relationNames) {
+    const cacheKey = `${databaseId}:${normalizeRelationKey(name)}`;
+    if (relationCache && relationCache.has(cacheKey)) {
+      ids.push(relationCache.get(cacheKey));
+      continue;
+    }
+
+    const relationId = await ensureRelationPageId({
+      client,
+      databaseId,
+      titlePropName: relationSchema.titlePropName,
+      title: name,
+      errorIfNotFound,
+      allowCreate,
+    });
+
+    if (!relationId) {
+      continue;
+    }
+
+    if (relationCache) {
+      relationCache.set(cacheKey, relationId);
+    }
+
+    ids.push(relationId);
+  }
+
+  return ids;
 }
 
 function isEmptyValue(value) {
@@ -190,7 +361,19 @@ function buildPropertyValue({ type, value, mode, existingProperty }) {
   return coerceValueForPropertyType(type, String(value));
 }
 
-function buildProperties({ rule, frontmatter, schema, lastSyncedIso, existingProperties }) {
+async function buildProperties({
+  client,
+  rule,
+  frontmatter,
+  schema,
+  lastSyncedIso,
+  existingProperties,
+  schemaCache,
+  databaseIdCache,
+  relationCache,
+  env,
+  dryRun,
+}) {
   const { propNameToType } = schema;
   const properties = {};
 
@@ -212,12 +395,60 @@ function buildProperties({ rule, frontmatter, schema, lastSyncedIso, existingPro
     }
 
     const mode = option.mode || 'append';
-    const propertyValue = buildPropertyValue({
-      type,
-      value,
-      mode,
-      existingProperty: existingProperties ? existingProperties[targetName] : null,
-    });
+    let propertyValue = null;
+
+    if (option.type === 'relation' || option.databaseName || option.databaseId) {
+      if (type !== 'relation') {
+        throw new Error(`Property "${targetName}" is type "${type}" but relation config was provided.`);
+      }
+
+      const resolvedByConfig = await resolveRelationDatabaseId({
+        client,
+        databaseId: option.databaseId,
+        databaseName: option.databaseName,
+        env,
+        databaseIdCache,
+      });
+
+      const schemaRelationId = schema.relationDatabaseIdByProp[targetName];
+      const resolvedDatabaseId =
+        resolvedByConfig || normalizeNotionId(schemaRelationId) || schemaRelationId;
+
+      if (!resolvedDatabaseId) {
+        throw new Error(`Relation property "${targetName}" requires databaseName or databaseId.`);
+      }
+
+      if (schemaRelationId && normalizeNotionId(schemaRelationId) !== normalizeNotionId(resolvedDatabaseId)) {
+        throw new Error(
+          `Relation property "${targetName}" targets database ${schemaRelationId}, ` +
+            `but resolved database ${resolvedDatabaseId} was provided.`
+        );
+      }
+
+      const relationNames = parseMultiSelectValues(value);
+      const relationIds = await resolveRelationIds({
+        client,
+        schemaCache,
+        relationCache,
+        databaseId: resolvedDatabaseId,
+        relationNames,
+        errorIfNotFound: option.errorIfNotFound === true,
+        allowCreate: !dryRun,
+      });
+
+      propertyValue = buildRelationPropertyValue({
+        ids: relationIds,
+        mode,
+        existingProperty: existingProperties ? existingProperties[targetName] : null,
+      });
+    } else {
+      propertyValue = buildPropertyValue({
+        type,
+        value,
+        mode,
+        existingProperty: existingProperties ? existingProperties[targetName] : null,
+      });
+    }
 
     if (propertyValue) {
       properties[targetName] = propertyValue;
@@ -364,6 +595,10 @@ async function syncNote({
   schema,
   existingPage,
   dryRun,
+  schemaCache,
+  databaseIdCache,
+  relationCache,
+  env,
 }) {
   const parsed = parseNoteFile(filePath);
   const frontmatter = parsed.data || {};
@@ -372,12 +607,18 @@ async function syncNote({
   const lastSyncedFrontmatter = formatLocalDateTime(syncTimestamp);
   const lastSyncedIso = syncTimestamp.toISOString();
 
-  const properties = buildProperties({
+  const properties = await buildProperties({
+    client,
     rule,
     frontmatter,
     schema,
     lastSyncedIso,
     existingProperties: existingPage ? existingPage.properties : null,
+    schemaCache,
+    databaseIdCache,
+    relationCache,
+    env,
+    dryRun,
   });
 
   frontmatter.last_synced = lastSyncedFrontmatter;
@@ -522,6 +763,9 @@ module.exports = {
 
       const client = new Client({ auth: token });
       const schemaCache = new Map();
+      const databaseIdCache = new Map();
+      const relationCache = new Map();
+      const env = process.env.NODE_ENV === 'test' ? 'test' : 'production';
 
       for (const filePath of noteFiles) {
         let noteFname = null;
@@ -561,6 +805,10 @@ module.exports = {
             schema,
             existingPage,
             dryRun,
+            schemaCache,
+            databaseIdCache,
+            relationCache,
+            env,
           });
 
           if (result.action === 'created' || result.action === 'would_create') {
@@ -600,5 +848,9 @@ module.exports = {
   resolveNoteRoots,
   getDatabaseSchema,
   buildProperties,
+  resolveRelationDatabaseId,
+  resolveRelationIds,
+  buildRelationPropertyValue,
+  findPageByTitle,
   syncNote,
 };
