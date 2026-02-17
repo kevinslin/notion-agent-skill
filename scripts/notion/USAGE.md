@@ -53,6 +53,27 @@ node notion.js list-db
 node notion.js list-db --limit 10 --format table
 ```
 
+### `lookup`
+
+Search Notion pages and databases by query text using Notion Search API.
+
+Options:
+
+- positional `query`: Query text to search for (optional).
+- `--filter`: Search filter in `object:value` format. Supported values: `page`, `database` (`data_source` accepted as alias).
+- `--sort`: Sort in `last_edited_time:ascending|descending` format (`asc`/`desc` also accepted).
+- `--limit`: Maximum number of results to return (default: all).
+- `--start-cursor`: Optional pagination cursor to continue from.
+- `--format`: Output format: `json` (default) or `table`.
+
+Examples:
+
+```bash
+node notion.js lookup "project alpha"
+node notion.js lookup "project alpha" --filter object:page --sort last_edited_time:descending --limit 10
+node notion.js lookup --filter object:database --format table
+```
+
 ### `fetch`
 
 Fetch pages from a Notion database.

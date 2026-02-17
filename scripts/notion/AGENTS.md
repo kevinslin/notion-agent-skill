@@ -43,7 +43,7 @@ node -r dotenv/config notion.js create --database-id <id> --properties Name="Tes
 The codebase follows a clean separation of concerns:
 
 - **`notion.js`**: CLI entry point and command router using yargs
-- **`commands/`**: Individual command modules (currently: `create.js`)
+- **`commands/`**: Individual command modules (for example: `create.js`, `fetch.js`, `lookup.js`, `list-db.js`)
   - Each module exports: `{ command, describe, builder, handler }`
   - Handler contains the command implementation
 - **`utils/`**: Shared utility functions
@@ -123,10 +123,9 @@ Supported types:
 2. **No Dendron date inference**: V1 extracted dates from `daily.journal.YYYY.MM.DD.md` filenames. Not yet implemented.
 3. **No database discovery**: V1 could find databases by name. V2 requires explicit database IDs.
 4. **Simple markdown parsing**: Only paragraph blocks, not headings/lists/etc.
-5. **Fewer commands**: V1 had create_page, fetch_page, sync, update. V2 currently has `create`, `list-db`, `sync-meta`, `parse-block`, `status`, and `sync` (fetch/update not yet implemented).
+5. **Fewer commands**: V1 had create_page, fetch_page, sync, update. V2 currently has `create`, `list-db`, `sync-meta`, `parse-block`, `status`, `sync`, `fetch`, and `lookup` (`update` not yet implemented).
 
 ### Future Commands (Not Yet Implemented)
-- `fetch`: Query and retrieve pages with filtering
 - `update`: Update page metadata
 
 See `llm/plans/2025-12-14-refactor-to-notionv2/plan.md` for the full implementation roadmap.
@@ -138,7 +137,9 @@ notionv2/
 ├── notion.js                  # CLI entry point
 ├── commands/
 │   ├── create.js             # Create command implementation
+│   ├── fetch.js              # Fetch pages from a database
 │   ├── list-db.js            # List databases command
+│   ├── lookup.js             # Search pages/databases via Notion Search API
 │   ├── sync.js               # Sync notes to Notion command
 │   └── sync-meta.js          # Sync database metadata command
 ├── utils/
@@ -146,11 +147,15 @@ notionv2/
 │   ├── filter.js             # Filter parsing and conversion
 │   └── index.js              # Re-exports
 ├── tests/
-│   └── filter.test.js        # Unit tests (no DB calls)
+│   ├── fetch.test.js         # Fetch helper unit tests
+│   ├── filter.test.js        # Filter parser unit tests
+│   └── lookup.test.js        # Lookup helper unit tests
 ├── integ/
 │   ├── create.test.js        # Integration tests (DB calls)
+│   ├── fetch.test.js         # Fetch integration tests
 │   ├── filter.test.js        # Filter integration tests
 │   ├── list-db.test.js       # List databases tests
+│   ├── lookup.test.js        # Lookup integration tests
 │   ├── sync-meta.test.js     # Sync metadata tests
 │   ├── setupTestDatabase.js  # Test database setup script
 │   └── __snapshots__/        # Jest snapshots
