@@ -94,6 +94,57 @@ describe('sync relation buildProperties', () => {
     });
   });
 
+  test('reuses existing relation target when one already exists', async () => {
+    mockResolveDatabaseId.mockResolvedValue({
+      id: '00000000-0000-0000-0000-000000000111',
+      title: 'Projects',
+    });
+
+    const client = {
+      databases: {
+        retrieve: jest.fn().mockResolvedValue({
+          properties: {
+            Name: { type: 'title' },
+          },
+        }),
+        query: jest.fn().mockResolvedValue({
+          results: [{ id: '00000000-0000-0000-0000-000000000333' }],
+        }),
+      },
+      pages: {
+        create: jest.fn(),
+      },
+    };
+
+    const properties = await buildProperties({
+      client,
+      rule: {
+        fmToSync: [
+          {
+            name: 'proj',
+            target: 'Project',
+            type: 'relation',
+            databaseName: 'Projects',
+          },
+        ],
+      },
+      frontmatter: baseFrontmatter,
+      schema: baseSchema,
+      lastSyncedIso,
+      existingProperties: null,
+      schemaCache: new Map(),
+      databaseIdCache: new Map(),
+      relationCache: new Map(),
+      env: 'test',
+      dryRun: false,
+    });
+
+    expect(client.pages.create).not.toHaveBeenCalled();
+    expect(properties.Project).toEqual({
+      relation: [{ id: '00000000-0000-0000-0000-000000000333' }],
+    });
+  });
+
   test('throws when relation target is missing and errorIfNotFound is true', async () => {
     mockResolveDatabaseId.mockResolvedValue({
       id: '00000000-0000-0000-0000-000000000111',
