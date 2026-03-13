@@ -2,7 +2,7 @@
 
 Place one or more `.yaml` (or `.yml`) files in your `~/.notion-agents-skill/syncRules` directory. Each file should define a sync rule object (or list of objects) that matches the `SyncRule` shape.
 
-Example:
+Markdown sync example:
 
 ```yaml
 fnameTrigger: "task.*"
@@ -15,7 +15,7 @@ destination:
   databaseId: "your-database-id"
 ```
 
-Relation fields (by page title):
+Markdown relation fields (by page title):
 
 ```yaml
 fnameTrigger: "task.*"
@@ -32,7 +32,46 @@ destination:
   databaseId: "your-database-id"
 ```
 
+CSV sync example:
+
+```yaml
+fnameTrigger: "task.csv-*"
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Summary
+    toType: body
+  - fromName: Screenshot
+    toType: file/image
+  - fromName: Attachment
+    process: "./processors/upload-file.js"
+    toType: file/image
+destination:
+  kind: db
+  id: "your-database-id"
+```
+
+Example CSV processor:
+
+```js
+module.exports = ({ value, helper }) => {
+  if (!value) {
+    return null;
+  }
+
+  return helper.uploadFile(value);
+};
+```
+
 Notes:
+- Markdown sync still uses `fmToSync` plus `destination.databaseId`.
+- CSV sync uses `mapping` plus `destination.kind` and `destination.id`.
+- `destination.kind: page` is reserved for future support and currently rejected.
+- CSV `toType` supports `string`, `number`, `body`, and `file/image`.
+- If `toName` is omitted for CSV, the CLI uses `fromName`.
+- CSV processor files are resolved relative to the rule file first and must export a single function.
+- CSV processors receive `helper.asBody()`, `helper.asFile()`, and `helper.uploadFile()` so they do not need direct Notion dependencies.
+- If a CSV row lacks `dendron_id` and `id`, the CLI derives a stable `dendron_id` from the rule name plus mapped values.
 - `type: relation` enables name-based relation resolution.
 - `databaseName` (or `databaseId`) identifies the related database. The CLI uses the Notion database list/cache to resolve the ID.
 - `errorIfNotFound` defaults to `false` (missing relation targets are created).

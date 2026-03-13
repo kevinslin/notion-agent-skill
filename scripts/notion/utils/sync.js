@@ -161,6 +161,140 @@ function collectMarkdownFiles(rootPath, ignoreDirs = new Set()) {
   return results;
 }
 
+function collectFilesByExtension(rootPath, extension, ignoreDirs = new Set()) {
+  const results = [];
+  if (!fs.existsSync(rootPath)) return results;
+
+  const stats = fs.statSync(rootPath);
+  if (stats.isFile()) {
+    if (path.extname(rootPath) === extension) {
+      results.push(rootPath);
+    }
+    return results;
+  }
+
+  if (!stats.isDirectory()) return results;
+
+  const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      if (ignoreDirs.has(entry.name)) {
+        continue;
+      }
+      results.push(...collectFilesByExtension(fullPath, extension, ignoreDirs));
+    } else if (entry.isFile() && path.extname(entry.name) === extension) {
+      results.push(fullPath);
+    }
+  }
+
+  return results;
+}
+
+function collectCsvFiles(rootPath, ignoreDirs = new Set()) {
+  return collectFilesByExtension(rootPath, '.csv', ignoreDirs);
+}
+
+function parseCsv(csvText) {
+  if (!csvText || typeof csvText !== 'string') {
+    return { headers: [], rows: [] };
+  }
+
+  const rawRows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i += 1) {
+    const char = csvText[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (csvText[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === ',') {
+      row.push(field);
+      field = '';
+      continue;
+    }
+
+    if (char === '\n') {
+      row.push(field);
+      rawRows.push(row);
+      row = [];
+      field = '';
+      continue;
+    }
+
+    if (char === '\r') {
+      continue;
+    }
+
+    field += char;
+  }
+
+  if (field.length || row.length) {
+    row.push(field);
+    rawRows.push(row);
+  }
+
+  const normalizedRows = rawRows.filter((cells) => cells.some((cell) => cell !== ''));
+  if (!normalizedRows.length) {
+    return { headers: [], rows: [] };
+  }
+
+  const headers = normalizedRows[0].map((header) => String(header || '').trim());
+  const rows = normalizedRows.slice(1).map((cells) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      if (!header) {
+        return;
+      }
+      record[header] = cells[index] !== undefined ? cells[index] : '';
+    });
+    return record;
+  });
+
+  return { headers, rows };
+}
+
+function escapeCsvValue(value) {
+  const stringValue = value === undefined || value === null ? '' : String(value);
+  if (!/[",\n\r]/.test(stringValue)) {
+    return stringValue;
+  }
+  return `"${stringValue.replace(/"/g, '""')}"`;
+}
+
+function serializeCsv(headers, rows) {
+  const safeHeaders = Array.isArray(headers) ? headers.filter(Boolean) : [];
+  if (!safeHeaders.length) {
+    return '';
+  }
+
+  const lines = [
+    safeHeaders.map(escapeCsvValue).join(','),
+    ...(rows || []).map((row) => safeHeaders.map((header) => escapeCsvValue(row ? row[header] : '')).join(',')),
+  ];
+
+  return `${lines.join('\n')}\n`;
+}
+
 module.exports = {
   parseFrontmatter,
   serializeFrontmatter,
@@ -171,4 +305,7 @@ module.exports = {
   extractNotionIdFromUrl,
   ensureDirectoryExists,
   collectMarkdownFiles,
+  collectCsvFiles,
+  parseCsv,
+  serializeCsv,
 };

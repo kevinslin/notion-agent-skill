@@ -1,7 +1,9 @@
+const crypto = require('crypto');
 const { Client } = require('@notionhq/client');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const readline = require('readline');
 const yaml = require('js-yaml');
 const {
   coerceValueForPropertyType,
@@ -16,12 +18,176 @@ const {
   extractNotionIdFromUrl,
   ensureDirectoryExists,
   collectMarkdownFiles,
+  collectCsvFiles,
+  parseCsv,
+  serializeCsv,
 } = require('../utils');
 const { resolveDatabaseId } = require('./fetch');
 
 const NOTION_ONLY_LABEL = 'NOTION_ONLY';
 const DEFAULT_IGNORE_DIRS = new Set(['node_modules', '.git', 'syncRules']);
 const DEFAULT_RULES_DIR = path.join(os.homedir(), '.notion-agents-skill', 'syncRules');
+const CSV_METADATA_COLUMNS = new Set(['id', 'dendron_id', 'fname', 'notion_url', 'last_synced']);
+const SYNC_SOURCE_FORMATS = new Set(['md', 'csv']);
+const CSV_TO_TYPES = new Set(['string', 'number', 'body', 'file/image']);
+const NOTION_API_VERSION = '2026-03-11';
+const CSV_BODY_SEPARATOR = '\n\n';
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tif', '.tiff']);
+const MIME_TYPES_BY_EXTENSION = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+};
+
+function normalizeCsvToType(rawType) {
+  if (rawType === undefined || rawType === null || rawType === '') {
+    return undefined;
+  }
+
+  const normalized = String(rawType).trim().toLowerCase();
+  if (normalized === 'image' || normalized === 'file') {
+    return 'file/image';
+  }
+
+  if (!CSV_TO_TYPES.has(normalized)) {
+    throw new Error(
+      `Invalid mapping toType "${rawType}". Expected one of: string, number, body, file/image.`
+    );
+  }
+
+  return normalized;
+}
+
+function normalizeDestinationKind(rawKind) {
+  const normalized = String(rawKind || '').trim().toLowerCase();
+  if (normalized === 'db' || normalized === 'database') {
+    return 'db';
+  }
+  if (normalized === 'page') {
+    throw new Error('destination.kind "page" is not implemented yet.');
+  }
+  throw new Error(`Invalid destination.kind "${rawKind}". Expected "db" or "page".`);
+}
+
+function resolveProcessorPath(processorRef, ruleFilePath) {
+  const baseDir = path.dirname(ruleFilePath);
+  if (path.isAbsolute(processorRef)) {
+    return processorRef;
+  }
+
+  const ruleRelativePath = path.resolve(baseDir, processorRef);
+  if (fs.existsSync(ruleRelativePath)) {
+    return ruleRelativePath;
+  }
+
+  return path.resolve(process.cwd(), processorRef);
+}
+
+function loadProcessorFunction(processorRef, ruleFilePath) {
+  const resolvedPath = resolveProcessorPath(processorRef, ruleFilePath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Processor file not found: ${processorRef}`);
+  }
+
+  delete require.cache[resolvedPath];
+  const loaded = require(resolvedPath);
+  const processFn = typeof loaded === 'function' ? loaded : loaded && typeof loaded.default === 'function' ? loaded.default : null;
+
+  if (typeof processFn !== 'function') {
+    throw new Error(`Processor file "${processorRef}" must export a function.`);
+  }
+
+  return { processFn, resolvedPath };
+}
+
+function normalizeMarkdownRule(rawRule, file, ruleName) {
+  const fmToSync = rawRule.fmToSync || [];
+  if (!Array.isArray(fmToSync)) {
+    throw new Error(`Rule in ${file} has invalid fmToSync; expected array.`);
+  }
+
+  if (!rawRule.destination || !rawRule.destination.databaseId) {
+    throw new Error(`Rule in ${file} is missing destination.databaseId.`);
+  }
+
+  return {
+    ...rawRule,
+    sourceFormat: 'md',
+    fmToSync,
+    ruleName,
+    destination: {
+      ...rawRule.destination,
+      databaseId: rawRule.destination.databaseId,
+    },
+  };
+}
+
+function normalizeCsvRule(rawRule, file, fullPath, ruleName) {
+  if (rawRule.fmToSync !== undefined) {
+    throw new Error(`CSV rule in ${file} cannot use fmToSync. Use mapping instead.`);
+  }
+
+  if (!Array.isArray(rawRule.mapping) || !rawRule.mapping.length) {
+    throw new Error(`CSV rule in ${file} is missing mapping.`);
+  }
+
+  if (!rawRule.destination || typeof rawRule.destination !== 'object') {
+    throw new Error(`CSV rule in ${file} is missing destination.`);
+  }
+
+  const destinationKind = normalizeDestinationKind(rawRule.destination.kind);
+  if (!rawRule.destination.id) {
+    throw new Error(`CSV rule in ${file} is missing destination.id.`);
+  }
+
+  const mapping = rawRule.mapping.map((entry, index) => {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(`CSV rule in ${file} has invalid mapping at index ${index}. Expected object.`);
+    }
+    if (!entry.fromName) {
+      throw new Error(`CSV rule in ${file} has mapping at index ${index} without fromName.`);
+    }
+
+    const normalized = {
+      ...entry,
+      fromName: String(entry.fromName),
+      toName: entry.toName ? String(entry.toName) : entry.fromName,
+      toType: normalizeCsvToType(entry.toType),
+    };
+
+    if (entry.process) {
+      const { processFn, resolvedPath } = loadProcessorFunction(entry.process, fullPath);
+      normalized.process = entry.process;
+      normalized.processFn = processFn;
+      normalized.processPath = resolvedPath;
+    }
+
+    return normalized;
+  });
+
+  return {
+    ...rawRule,
+    sourceFormat: 'csv',
+    ruleName,
+    mapping,
+    ruleFilePath: fullPath,
+    destination: {
+      kind: destinationKind,
+      id: rawRule.destination.id,
+      databaseId: rawRule.destination.id,
+    },
+  };
+}
 
 function resolveRulesDir(rulesDir) {
   if (!rulesDir) {
@@ -81,20 +247,17 @@ function loadSyncRules(rulesDir) {
         throw new Error(`Rule in ${file} is missing fnameTrigger.`);
       }
 
-      const fmToSync = rawRule.fmToSync || [];
-      if (!Array.isArray(fmToSync)) {
-        throw new Error(`Rule in ${file} has invalid fmToSync; expected array.`);
-      }
-
-      if (!rawRule.destination || !rawRule.destination.databaseId) {
-        throw new Error(`Rule in ${file} is missing destination.databaseId.`);
-      }
+      const ruleName = rawRule.name || path.basename(file, path.extname(file));
+      const isCsvRule = rawRule.mapping !== undefined || rawRule.destination?.kind !== undefined || rawRule.destination?.id !== undefined;
+      const normalizedRule = isCsvRule
+        ? normalizeCsvRule(rawRule, file, fullPath, ruleName)
+        : normalizeMarkdownRule(rawRule, file, ruleName);
 
       rules.push({
-        ...rawRule,
+        ...normalizedRule,
         fnameTrigger,
-        fmToSync,
-        ruleName: rawRule.name || path.basename(file, path.extname(file)),
+        ruleName,
+        ruleFilePath: normalizedRule.ruleFilePath || fullPath,
       });
     }
   }
@@ -120,6 +283,55 @@ function resolveNoteRoots(extraPaths) {
   }
 
   return [...new Set(roots)];
+}
+
+function resolveCsvRoots(extraPaths) {
+  const roots = [process.cwd()];
+
+  for (const extraPath of extraPaths || []) {
+    const resolved = path.resolve(process.cwd(), extraPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Path does not exist: ${extraPath}`);
+    }
+    roots.push(resolved);
+  }
+
+  return [...new Set(roots)];
+}
+
+function collectSourceFiles(rootPath, sourceFormat) {
+  if (sourceFormat === 'csv') {
+    return collectCsvFiles(rootPath, DEFAULT_IGNORE_DIRS);
+  }
+
+  return collectMarkdownFiles(rootPath, DEFAULT_IGNORE_DIRS);
+}
+
+async function promptForSourceFormat() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('Missing required --from option. Provide --from md or --from csv when running non-interactively.');
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    // Keep prompting until the user gives one of the supported formats.
+    while (true) {
+      const answer = await new Promise((resolve) => {
+        rl.question('Sync source format (md/csv): ', resolve);
+      });
+
+      const normalized = String(answer || '').trim().toLowerCase();
+      if (SYNC_SOURCE_FORMATS.has(normalized)) {
+        return normalized;
+      }
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 async function getDatabaseSchema(client, cache, databaseId) {
@@ -361,12 +573,20 @@ function buildPropertyValue({ type, value, mode, existingProperty }) {
   return coerceValueForPropertyType(type, String(value));
 }
 
-async function buildProperties({
+function getSyncFieldMappings(rule, sourceData, sourceFormat) {
+  if (sourceFormat === 'csv') {
+    return Array.isArray(rule.mapping) ? rule.mapping : [];
+  }
+
+  return Array.isArray(rule.fmToSync) ? rule.fmToSync : [];
+}
+
+async function resolveMappedPropertyValue({
   client,
-  rule,
-  frontmatter,
   schema,
-  lastSyncedIso,
+  targetName,
+  option,
+  value,
   existingProperties,
   schemaCache,
   databaseIdCache,
@@ -375,91 +595,69 @@ async function buildProperties({
   dryRun,
 }) {
   const { propNameToType } = schema;
-  const properties = {};
-
-  for (const option of rule.fmToSync) {
-    if (!option || !option.name) {
-      continue;
-    }
-
-    const targetName = option.target || option.name;
-    const value = frontmatter[option.name];
-    if (isEmptyValue(value)) {
-      continue;
-    }
-
-    const type = propNameToType[targetName];
-    if (!type) {
-      const available = Object.keys(propNameToType).join(', ');
-      throw new Error(`Property "${targetName}" not found in database schema. Available properties: ${available}`);
-    }
-
-    const mode = option.mode || 'append';
-    let propertyValue = null;
-
-    if (option.type === 'relation' || option.databaseName || option.databaseId) {
-      if (type !== 'relation') {
-        throw new Error(`Property "${targetName}" is type "${type}" but relation config was provided.`);
-      }
-
-      const resolvedByConfig = await resolveRelationDatabaseId({
-        client,
-        databaseId: option.databaseId,
-        databaseName: option.databaseName,
-        env,
-        databaseIdCache,
-      });
-
-      const schemaRelationId = schema.relationDatabaseIdByProp[targetName];
-      const resolvedDatabaseId =
-        resolvedByConfig || normalizeNotionId(schemaRelationId) || schemaRelationId;
-
-      if (!resolvedDatabaseId) {
-        throw new Error(`Relation property "${targetName}" requires databaseName or databaseId.`);
-      }
-
-      if (schemaRelationId && normalizeNotionId(schemaRelationId) !== normalizeNotionId(resolvedDatabaseId)) {
-        throw new Error(
-          `Relation property "${targetName}" targets database ${schemaRelationId}, ` +
-            `but resolved database ${resolvedDatabaseId} was provided.`
-        );
-      }
-
-      const relationNames = parseMultiSelectValues(value);
-      const relationIds = await resolveRelationIds({
-        client,
-        schemaCache,
-        relationCache,
-        databaseId: resolvedDatabaseId,
-        relationNames,
-        errorIfNotFound: option.errorIfNotFound === true,
-        allowCreate: !dryRun,
-      });
-
-      propertyValue = buildRelationPropertyValue({
-        ids: relationIds,
-        mode,
-        existingProperty: existingProperties ? existingProperties[targetName] : null,
-      });
-    } else {
-      propertyValue = buildPropertyValue({
-        type,
-        value,
-        mode,
-        existingProperty: existingProperties ? existingProperties[targetName] : null,
-      });
-    }
-
-    if (propertyValue) {
-      properties[targetName] = propertyValue;
-    }
+  const type = propNameToType[targetName];
+  if (!type) {
+    const available = Object.keys(propNameToType).join(', ');
+    throw new Error(`Property "${targetName}" not found in database schema. Available properties: ${available}`);
   }
 
-  const dendronId = frontmatter.id;
-  if (!dendronId) {
-    throw new Error('Frontmatter is missing required id field for dendron_id.');
+  const mode = option.mode || 'append';
+
+  if (option.type === 'relation' || option.databaseName || option.databaseId) {
+    if (type !== 'relation') {
+      throw new Error(`Property "${targetName}" is type "${type}" but relation config was provided.`);
+    }
+
+    const resolvedByConfig = await resolveRelationDatabaseId({
+      client,
+      databaseId: option.databaseId,
+      databaseName: option.databaseName,
+      env,
+      databaseIdCache,
+    });
+
+    const schemaRelationId = schema.relationDatabaseIdByProp[targetName];
+    const resolvedDatabaseId = resolvedByConfig || normalizeNotionId(schemaRelationId) || schemaRelationId;
+
+    if (!resolvedDatabaseId) {
+      throw new Error(`Relation property "${targetName}" requires databaseName or databaseId.`);
+    }
+
+    if (schemaRelationId && normalizeNotionId(schemaRelationId) !== normalizeNotionId(resolvedDatabaseId)) {
+      throw new Error(
+        `Relation property "${targetName}" targets database ${schemaRelationId}, ` +
+          `but resolved database ${resolvedDatabaseId} was provided.`
+      );
+    }
+
+    const relationNames = parseMultiSelectValues(value);
+    const relationIds = await resolveRelationIds({
+      client,
+      schemaCache,
+      relationCache,
+      databaseId: resolvedDatabaseId,
+      relationNames,
+      errorIfNotFound: option.errorIfNotFound === true,
+      allowCreate: !dryRun,
+    });
+
+    return buildRelationPropertyValue({
+      ids: relationIds,
+      mode,
+      existingProperty: existingProperties ? existingProperties[targetName] : null,
+    });
   }
 
+  return buildPropertyValue({
+    type,
+    value,
+    mode,
+    existingProperty: existingProperties ? existingProperties[targetName] : null,
+  });
+}
+
+function applyRequiredSyncProperties({ properties, schema, dendronId, lastSyncedIso, existingProperties }) {
+  const { propNameToType } = schema;
   const requiredMappings = [
     { name: 'dendron_id', value: dendronId },
     { name: 'last_synced', value: lastSyncedIso },
@@ -479,6 +677,65 @@ async function buildProperties({
       existingProperty: existingProperties ? existingProperties[mapping.name] : null,
     });
   }
+}
+
+async function buildProperties({
+  client,
+  rule,
+  sourceData,
+  schema,
+  lastSyncedIso,
+  existingProperties,
+  schemaCache,
+  databaseIdCache,
+  relationCache,
+  env,
+  dryRun,
+}) {
+  const properties = {};
+
+  for (const option of getSyncFieldMappings(rule, sourceData, 'md')) {
+    if (!option || !option.name) {
+      continue;
+    }
+
+    const value = sourceData[option.name];
+    if (isEmptyValue(value)) {
+      continue;
+    }
+
+    const targetName = option.target || option.name;
+    const propertyValue = await resolveMappedPropertyValue({
+      client,
+      schema,
+      targetName,
+      option,
+      value,
+      existingProperties,
+      schemaCache,
+      databaseIdCache,
+      relationCache,
+      env,
+      dryRun,
+    });
+
+    if (propertyValue) {
+      properties[targetName] = propertyValue;
+    }
+  }
+
+  const dendronId = sourceData.dendron_id || sourceData.id;
+  if (!dendronId) {
+    throw new Error('Sync source is missing required id field for dendron_id.');
+  }
+
+  applyRequiredSyncProperties({
+    properties,
+    schema,
+    dendronId,
+    lastSyncedIso,
+    existingProperties,
+  });
 
   return properties;
 }
@@ -502,15 +759,347 @@ function parseNoteFile(filePath) {
   return parsed;
 }
 
-function getNoteFname(frontmatter, filePath) {
-  if (frontmatter && frontmatter.fname) {
-    return String(frontmatter.fname);
+function getSourceFname(sourceData, filePath) {
+  if (sourceData && sourceData.fname) {
+    return String(sourceData.fname);
   }
   return path.basename(filePath, path.extname(filePath));
 }
 
+function parseCsvFile(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  return parseCsv(raw);
+}
+
+function getCsvRowSyncId(row, rule) {
+  const explicitId = row.dendron_id || row.id;
+  if (explicitId) {
+    return String(explicitId);
+  }
+
+  const orderedValues = getSyncFieldMappings(rule, row, 'csv').map((mapping) => ({
+    fromName: mapping.fromName,
+    value: row[mapping.fromName] ?? '',
+  }));
+  const digest = crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ ruleName: rule.ruleName, orderedValues }))
+    .digest('hex')
+    .slice(0, 24);
+
+  return `csv:${rule.ruleName}:${digest}`;
+}
+
 function findMatchingRules(rules, fname) {
   return rules.filter((rule) => matchFnameTrigger(fname, rule.fnameTrigger));
+}
+
+function buildDatabaseQueryFilter(propertyType, value) {
+  switch (propertyType) {
+    case 'rich_text':
+      return { rich_text: { equals: String(value) } };
+    case 'title':
+      return { title: { equals: String(value) } };
+    case 'number': {
+      const numericValue = Number(value);
+      if (Number.isNaN(numericValue)) {
+        throw new Error(`Cannot query number property with non-numeric value "${value}".`);
+      }
+      return { number: { equals: numericValue } };
+    }
+    case 'url':
+      return { url: { equals: String(value) } };
+    case 'email':
+      return { email: { equals: String(value) } };
+    case 'phone_number':
+      return { phone_number: { equals: String(value) } };
+    default:
+      throw new Error(`Unsupported property type "${propertyType}" for lookup.`);
+  }
+}
+
+async function findPageByPropertyValue({
+  client,
+  databaseId,
+  propertyName,
+  propertyType,
+  value,
+}) {
+  const response = await client.databases.query({
+    database_id: databaseId,
+    filter: {
+      property: propertyName,
+      ...buildDatabaseQueryFilter(propertyType, value),
+    },
+    page_size: 2,
+  });
+
+  const results = response.results || [];
+  if (results.length > 1) {
+    throw new Error(`Multiple pages found for ${propertyName}="${value}" in database ${databaseId}.`);
+  }
+
+  return results.length ? results[0] : null;
+}
+
+function flattenProcessorOutput(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap(flattenProcessorOutput);
+  }
+  return [value];
+}
+
+function createBodyHelperResult(text) {
+  return { __syncKind: 'body', text: text === undefined || text === null ? '' : String(text) };
+}
+
+function createFileHelperResult(input) {
+  return { __syncKind: 'file', input };
+}
+
+function isExternalUrl(rawValue) {
+  return /^https?:\/\//i.test(String(rawValue || '').trim());
+}
+
+function inferFileBlockType(rawValue, explicitType) {
+  const normalizedExplicit = String(explicitType || '').trim().toLowerCase();
+  if (normalizedExplicit === 'file' || normalizedExplicit === 'image') {
+    return normalizedExplicit;
+  }
+
+  let pathname = String(rawValue || '');
+  if (isExternalUrl(rawValue)) {
+    try {
+      pathname = new URL(rawValue).pathname;
+    } catch (_err) {
+      pathname = String(rawValue || '');
+    }
+  }
+
+  return IMAGE_EXTENSIONS.has(path.extname(pathname).toLowerCase()) ? 'image' : 'file';
+}
+
+function getMimeTypeForFile(filePath) {
+  return MIME_TYPES_BY_EXTENSION[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+function resolveLocalFilePath(rawPath, baseDirs) {
+  const candidates = [];
+  if (path.isAbsolute(rawPath)) {
+    candidates.push(rawPath);
+  } else {
+    for (const baseDir of baseDirs) {
+      if (baseDir) {
+        candidates.push(path.resolve(baseDir, rawPath));
+      }
+    }
+    candidates.push(path.resolve(process.cwd(), rawPath));
+  }
+
+  const resolved = candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!resolved) {
+    throw new Error(`File not found for upload: ${rawPath}`);
+  }
+
+  return resolved;
+}
+
+function normalizeDeferredFileAction(input, context) {
+  if (input && typeof input === 'object' && input.__syncKind === 'file') {
+    return normalizeDeferredFileAction(input.input, context);
+  }
+
+  if (Array.isArray(input)) {
+    return input.flatMap((item) => normalizeDeferredFileAction(item, context));
+  }
+
+  if (input === undefined || input === null || input === '') {
+    return [];
+  }
+
+  if (typeof input === 'string') {
+    if (isExternalUrl(input)) {
+      return [
+        {
+          source: 'external',
+          url: input,
+          blockType: inferFileBlockType(input),
+        },
+      ];
+    }
+
+    return [
+      {
+        source: 'local',
+        filePath: resolveLocalFilePath(input, context.baseDirs),
+        blockType: inferFileBlockType(input),
+      },
+    ];
+  }
+
+  if (typeof input !== 'object') {
+    throw new Error(`Unsupported file/image mapping value: ${String(input)}`);
+  }
+
+  const rawUrl = input.url || input.href;
+  if (rawUrl) {
+    return [
+      {
+        source: 'external',
+        url: rawUrl,
+        blockType: inferFileBlockType(rawUrl, input.blockType || input.type),
+      },
+    ];
+  }
+
+  const rawPath = input.path || input.filePath || input.input || input.src;
+  if (!rawPath) {
+    throw new Error('File/image mapping objects must include url, path, filePath, input, or src.');
+  }
+
+  return [
+    {
+      source: 'local',
+      filePath: resolveLocalFilePath(rawPath, context.baseDirs),
+      blockType: inferFileBlockType(rawPath, input.blockType || input.type),
+    },
+  ];
+}
+
+function createCsvProcessHelper(context) {
+  return {
+    asBody: (text) => createBodyHelperResult(text),
+    asFile: (input) => createFileHelperResult(input),
+    uploadFile: (input) => createFileHelperResult(input),
+  };
+}
+
+function normalizePrimitiveMappingValue(value, toType) {
+  if (value === undefined || value === null || toType === undefined) {
+    return value;
+  }
+
+  if (toType === 'number') {
+    const numericValue = Number(value);
+    if (Number.isNaN(numericValue)) {
+      throw new Error(`Invalid number mapping value: ${value}`);
+    }
+    return numericValue;
+  }
+
+  if (toType === 'string') {
+    return String(value);
+  }
+
+  return value;
+}
+
+async function buildCsvSyncPayload({
+  client,
+  rule,
+  row,
+  schema,
+  lastSyncedIso,
+  existingProperties,
+  schemaCache,
+  databaseIdCache,
+  relationCache,
+  env,
+  dryRun,
+  sourceFilePath,
+}) {
+  const properties = {};
+  const bodyFragments = [];
+  const fileActions = [];
+  const helper = createCsvProcessHelper({
+    sourceFilePath,
+    ruleFilePath: rule.ruleFilePath,
+  });
+  const fileContext = {
+    baseDirs: [
+      sourceFilePath ? path.dirname(sourceFilePath) : null,
+      rule.ruleFilePath ? path.dirname(rule.ruleFilePath) : null,
+    ].filter(Boolean),
+  };
+
+  for (const mapping of getSyncFieldMappings(rule, row, 'csv')) {
+    const rawValue = row[mapping.fromName];
+    if (isEmptyValue(rawValue) && !mapping.processFn) {
+      continue;
+    }
+
+    const processedValue = mapping.processFn
+      ? await mapping.processFn({ column: mapping.fromName, value: rawValue, helper })
+      : rawValue;
+
+    if (isEmptyValue(processedValue)) {
+      continue;
+    }
+
+    for (const item of flattenProcessorOutput(processedValue)) {
+      if (item && typeof item === 'object' && item.__syncKind === 'body') {
+        if (!isEmptyValue(item.text)) {
+          bodyFragments.push(String(item.text));
+        }
+        continue;
+      }
+
+      if (item && typeof item === 'object' && item.__syncKind === 'file') {
+        fileActions.push(...normalizeDeferredFileAction(item, fileContext));
+        continue;
+      }
+
+      if (mapping.toType === 'body') {
+        if (!isEmptyValue(item)) {
+          bodyFragments.push(String(item));
+        }
+        continue;
+      }
+
+      if (mapping.toType === 'file/image') {
+        fileActions.push(...normalizeDeferredFileAction(item, fileContext));
+        continue;
+      }
+
+      const targetName = mapping.toName || mapping.fromName;
+      const propertyValue = await resolveMappedPropertyValue({
+        client,
+        schema,
+        targetName,
+        option: mapping,
+        value: normalizePrimitiveMappingValue(item, mapping.toType),
+        existingProperties,
+        schemaCache,
+        databaseIdCache,
+        relationCache,
+        env,
+        dryRun,
+      });
+
+      if (propertyValue) {
+        properties[targetName] = propertyValue;
+      }
+    }
+  }
+
+  const dendronId = row.dendron_id || row.id;
+  if (!dendronId) {
+    throw new Error('Sync source is missing required id field for dendron_id.');
+  }
+
+  applyRequiredSyncProperties({
+    properties,
+    schema,
+    dendronId,
+    lastSyncedIso,
+    existingProperties,
+  });
+
+  return {
+    properties,
+    body: bodyFragments.filter((fragment) => !isEmptyValue(fragment)).join(CSV_BODY_SEPARATOR),
+    fileActions,
+  };
 }
 
 function isNotionOnlyToggle(block) {
@@ -588,7 +1177,234 @@ async function replacePageBody({ client, pageId, body }) {
   await appendBlocksInChunks(client, pageId, newBlocks);
 }
 
-async function syncNote({
+async function notionJsonRequest(url, options = {}) {
+  const response = await fetch(url, options);
+  const responseText = await response.text();
+  let parsed = {};
+
+  if (responseText) {
+    try {
+      parsed = JSON.parse(responseText);
+    } catch (_err) {
+      parsed = { message: responseText };
+    }
+  }
+
+  if (!response.ok) {
+    const error = new Error(parsed.message || `Notion API request failed (${response.status})`);
+    error.body = parsed;
+    throw error;
+  }
+
+  return parsed;
+}
+
+async function uploadLocalFileToNotion({ authToken, filePath }) {
+  const createdUpload = await notionJsonRequest('https://api.notion.com/v1/file_uploads', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      'Content-Type': 'application/json',
+      'Notion-Version': NOTION_API_VERSION,
+    },
+    body: JSON.stringify({ mode: 'single_part' }),
+  });
+
+  const form = new FormData();
+  const fileBuffer = await fs.promises.readFile(filePath);
+  form.append('file', new Blob([fileBuffer], { type: getMimeTypeForFile(filePath) }), path.basename(filePath));
+
+  await fetch(`https://api.notion.com/v1/file_uploads/${createdUpload.id}/send`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      'Notion-Version': NOTION_API_VERSION,
+    },
+    body: form,
+  }).then(async (response) => {
+    const responseText = await response.text();
+    if (!response.ok) {
+      let parsed = {};
+      if (responseText) {
+        try {
+          parsed = JSON.parse(responseText);
+        } catch (_err) {
+          parsed = { message: responseText };
+        }
+      }
+      const error = new Error(parsed.message || `Notion file upload failed (${response.status})`);
+      error.body = parsed;
+      throw error;
+    }
+  });
+
+  return createdUpload.id;
+}
+
+function buildExternalFileBlock(fileAction) {
+  return {
+    object: 'block',
+    type: fileAction.blockType,
+    [fileAction.blockType]: {
+      type: 'external',
+      external: { url: fileAction.url },
+    },
+  };
+}
+
+function buildUploadedFileBlock(fileAction, fileUploadId) {
+  return {
+    object: 'block',
+    type: fileAction.blockType,
+    [fileAction.blockType]: {
+      type: 'file_upload',
+      file_upload: { id: fileUploadId },
+    },
+  };
+}
+
+async function appendDeferredFileBlocks({ client, pageId, fileActions, authToken }) {
+  if (!fileActions || !fileActions.length) {
+    return;
+  }
+
+  const blocks = [];
+  for (const fileAction of fileActions) {
+    if (fileAction.source === 'external') {
+      blocks.push(buildExternalFileBlock(fileAction));
+      continue;
+    }
+
+    const fileUploadId = await uploadLocalFileToNotion({
+      authToken,
+      filePath: fileAction.filePath,
+    });
+    blocks.push(buildUploadedFileBlock(fileAction, fileUploadId));
+  }
+
+  await appendBlocksInChunks(client, pageId, blocks);
+}
+
+async function syncRecord({
+  client,
+  rule,
+  schema,
+  sourceData,
+  sourceFormat,
+  body,
+  fileActions,
+  existingPage,
+  dryRun,
+  schemaCache,
+  databaseIdCache,
+  relationCache,
+  env,
+  authToken,
+  persist,
+  sourceFilePath,
+}) {
+  const syncTimestamp = new Date();
+  const lastSyncedFrontmatter = formatLocalDateTime(syncTimestamp);
+  const lastSyncedIso = syncTimestamp.toISOString();
+
+  const syncPayload =
+    sourceFormat === 'csv'
+      ? await buildCsvSyncPayload({
+          client,
+          rule,
+          row: sourceData,
+          schema,
+          lastSyncedIso,
+          existingProperties: existingPage ? existingPage.properties : null,
+          schemaCache,
+          databaseIdCache,
+          relationCache,
+          env,
+          dryRun,
+          sourceFilePath,
+        })
+      : {
+          properties: await buildProperties({
+            client,
+            rule,
+            sourceData,
+            schema,
+            lastSyncedIso,
+            existingProperties: existingPage ? existingPage.properties : null,
+            schemaCache,
+            databaseIdCache,
+            relationCache,
+            env,
+            dryRun,
+          }),
+          body,
+          fileActions: fileActions || [],
+        };
+
+  const effectiveBody = sourceFormat === 'csv' ? syncPayload.body : body;
+  const effectiveFileActions = sourceFormat === 'csv' ? syncPayload.fileActions : fileActions || [];
+  const properties = syncPayload.properties;
+
+  sourceData.last_synced = lastSyncedFrontmatter;
+
+  if (!sourceData.notion_url && existingPage && existingPage.url) {
+    sourceData.notion_url = existingPage.url;
+  }
+
+  if (!sourceData.notion_url) {
+    ensureTitleProperty({ properties, schema });
+    if (dryRun) {
+      return { action: 'would_create', url: null };
+    }
+    const created = await client.pages.create({
+      parent: { database_id: rule.destination.databaseId },
+      properties,
+    });
+    const newBlocks = markdownToParagraphBlocks(effectiveBody);
+    await appendBlocksInChunks(client, created.id, newBlocks);
+    await appendDeferredFileBlocks({
+      client,
+      pageId: created.id,
+      fileActions: effectiveFileActions,
+      authToken,
+    });
+    sourceData.notion_url = created.url;
+    if (persist) {
+      persist();
+    }
+    return { action: 'created', url: created.url };
+  }
+
+  const pageId = existingPage ? existingPage.id : normalizeNotionId(extractNotionIdFromUrl(sourceData.notion_url));
+  if (!pageId) {
+    throw new Error('Unable to extract page ID from notion_url.');
+  }
+
+  if (dryRun) {
+    return { action: 'would_update', url: sourceData.notion_url };
+  }
+
+  await client.pages.update({
+    page_id: pageId,
+    properties,
+  });
+
+  await replacePageBody({ client, pageId, body: effectiveBody });
+  await appendDeferredFileBlocks({
+    client,
+    pageId,
+    fileActions: effectiveFileActions,
+    authToken,
+  });
+
+  if (persist) {
+    persist();
+  }
+
+  return { action: 'updated', url: sourceData.notion_url };
+}
+
+async function syncMarkdownFile({
   client,
   filePath,
   rule,
@@ -599,68 +1415,136 @@ async function syncNote({
   databaseIdCache,
   relationCache,
   env,
+  authToken,
 }) {
   const parsed = parseNoteFile(filePath);
   const frontmatter = parsed.data || {};
   const noteBody = parsed.body || '';
-  const syncTimestamp = new Date();
-  const lastSyncedFrontmatter = formatLocalDateTime(syncTimestamp);
-  const lastSyncedIso = syncTimestamp.toISOString();
 
-  const properties = await buildProperties({
+  return syncRecord({
     client,
     rule,
-    frontmatter,
     schema,
-    lastSyncedIso,
-    existingProperties: existingPage ? existingPage.properties : null,
+    sourceData: frontmatter,
+    sourceFormat: 'md',
+    body: noteBody,
+    fileActions: [],
+    existingPage,
+    dryRun,
     schemaCache,
     databaseIdCache,
     relationCache,
     env,
-    dryRun,
+    authToken,
+    persist: () => {
+      const output = serializeFrontmatter(frontmatter, noteBody);
+      fs.writeFileSync(filePath, output, 'utf8');
+    },
+    sourceFilePath: filePath,
   });
+}
 
-  frontmatter.last_synced = lastSyncedFrontmatter;
+async function syncCsvFile({
+  client,
+  filePath,
+  rules,
+  dryRun,
+  summary,
+  schemaCache,
+  databaseIdCache,
+  relationCache,
+  env,
+  authToken,
+}) {
+  const parsed = parseCsvFile(filePath);
+  const headers = [...parsed.headers];
+  const rows = parsed.rows || [];
+  const baseFname = path.basename(filePath, path.extname(filePath));
 
-  if (!frontmatter.notion_url) {
-    ensureTitleProperty({ properties, schema });
-    if (dryRun) {
-      return { action: 'would_create', url: null };
+  for (const requiredColumn of ['dendron_id', 'notion_url', 'last_synced']) {
+    if (!headers.includes(requiredColumn)) {
+      headers.push(requiredColumn);
     }
-    const created = await client.pages.create({
-      parent: { database_id: rule.destination.databaseId },
-      properties,
-    });
-    const newBlocks = markdownToParagraphBlocks(noteBody);
-    await appendBlocksInChunks(client, created.id, newBlocks);
-    frontmatter.notion_url = created.url;
-    const output = serializeFrontmatter(frontmatter, noteBody);
-    fs.writeFileSync(filePath, output, 'utf8');
-    return { action: 'created', url: created.url };
   }
 
-  const rawId = extractNotionIdFromUrl(frontmatter.notion_url);
-  if (!rawId) {
-    throw new Error('Unable to extract page ID from notion_url.');
+  const persistCsv = () => {
+    fs.writeFileSync(filePath, serializeCsv(headers, rows), 'utf8');
+  };
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const noteFname = getSourceFname(row, filePath) || baseFname;
+    try {
+      const matchingRules = findMatchingRules(rules, noteFname);
+
+      if (!matchingRules.length) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (matchingRules.length > 1) {
+        throw new Error(`Row matches multiple rules: ${matchingRules.map((r) => r.ruleName).join(', ')}`);
+      }
+
+      summary.matched += 1;
+      const rule = matchingRules[0];
+      const schema = await getDatabaseSchema(client, schemaCache, rule.destination.databaseId);
+      if (!row.dendron_id) {
+        row.dendron_id = getCsvRowSyncId(row, rule);
+      }
+
+      let existingPage = null;
+      if (row.notion_url) {
+        const rawId = extractNotionIdFromUrl(row.notion_url);
+        if (!rawId) {
+          throw new Error('Unable to extract page ID from notion_url.');
+        }
+        const pageId = normalizeNotionId(rawId);
+        existingPage = await client.pages.retrieve({ page_id: pageId });
+      } else if (row.dendron_id) {
+        existingPage = await findPageByPropertyValue({
+          client,
+          databaseId: rule.destination.databaseId,
+          propertyName: 'dendron_id',
+          propertyType: schema.propNameToType.dendron_id,
+          value: row.dendron_id,
+        });
+      }
+
+      const result = await syncRecord({
+        client,
+        rule,
+        schema,
+        sourceData: row,
+        sourceFormat: 'csv',
+        body: null,
+        fileActions: [],
+        existingPage,
+        dryRun,
+        schemaCache,
+        databaseIdCache,
+        relationCache,
+        env,
+        authToken,
+        persist: persistCsv,
+        sourceFilePath: filePath,
+      });
+
+      if (result.action === 'created' || result.action === 'would_create') {
+        summary.created += 1;
+      } else {
+        summary.updated += 1;
+      }
+
+      const prefix = dryRun ? 'DRY RUN:' : '✓';
+      const url = result.url || '(new)';
+      console.log(`${prefix} ${result.action} ${noteFname} [row ${rowIndex + 1}] -> ${url}`);
+    } catch (err) {
+      const message = err && err.body ? JSON.stringify(err.body, null, 2) : err.message || String(err);
+      summary.errors.push({ filePath, message });
+      console.error(`! Failed ${filePath} [row ${rowIndex + 1}]: ${message}`);
+    }
   }
-  const pageId = normalizeNotionId(rawId);
-
-  if (dryRun) {
-    return { action: 'would_update', url: frontmatter.notion_url };
-  }
-
-  await client.pages.update({
-    page_id: pageId,
-    properties,
-  });
-
-  await replacePageBody({ client, pageId, body: noteBody });
-
-  const output = serializeFrontmatter(frontmatter, noteBody);
-  fs.writeFileSync(filePath, output, 'utf8');
-
-  return { action: 'updated', url: frontmatter.notion_url };
 }
 
 module.exports = {
@@ -672,6 +1556,11 @@ module.exports = {
       .positional('target', {
         type: 'string',
         describe: 'File or directory to sync when provided positionally',
+      })
+      .option('from', {
+        type: 'string',
+        choices: ['md', 'csv'],
+        describe: 'Source format to sync from (required: md or csv)',
       })
       .option('rule', {
         type: 'string',
@@ -692,6 +1581,8 @@ module.exports = {
         describe: 'Directory containing sync rule YAML files',
       })
       .example('$0 sync')
+      .example('$0 sync --from md')
+      .example('$0 sync --from csv ./exports/tasks.csv')
       .example('$0 sync ./notes/task.2025.12.28.finalize-trip.md')
       .example('$0 sync --rule task')
       .example('$0 sync --rules-dir ./syncRules')
@@ -710,12 +1601,14 @@ module.exports = {
 
     try {
       const {
+        from: fromArg,
         rule: ruleFilter,
         path: extraPaths,
         target,
         dryRun,
         rulesDir: rulesDirInput,
       } = argv;
+      const sourceFormat = fromArg || (await promptForSourceFormat());
 
       const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
       if (!token) {
@@ -728,8 +1621,9 @@ module.exports = {
       const rules = ruleFilter
         ? allRules.filter((r) => r.ruleName === ruleFilter || r.name === ruleFilter)
         : allRules;
+      const sourceRules = rules.filter((rule) => rule.sourceFormat === sourceFormat);
 
-      if (!rules.length) {
+      if (!sourceRules.length) {
         throw new Error(`No matching sync rules found${ruleFilter ? ` for "${ruleFilter}"` : ''}.`);
       }
 
@@ -744,20 +1638,20 @@ module.exports = {
         }
         roots = [resolvedTarget];
       } else {
-        roots = resolveNoteRoots(extraPaths);
+        roots = sourceFormat === 'csv' ? resolveCsvRoots(extraPaths) : resolveNoteRoots(extraPaths);
       }
-      const noteFiles = new Set();
+      const sourceFiles = new Set();
 
       for (const root of roots) {
-        for (const filePath of collectMarkdownFiles(root, DEFAULT_IGNORE_DIRS)) {
-          noteFiles.add(filePath);
+        for (const filePath of collectSourceFiles(root, sourceFormat)) {
+          sourceFiles.add(filePath);
         }
       }
 
-      summary.total = noteFiles.size;
+      summary.total = sourceFiles.size;
 
       if (!summary.total) {
-        console.log('No markdown notes found to sync.');
+        console.log(`No ${sourceFormat} sources found to sync.`);
         process.exit(0);
       }
 
@@ -767,63 +1661,81 @@ module.exports = {
       const relationCache = new Map();
       const env = process.env.NODE_ENV === 'test' ? 'test' : 'production';
 
-      for (const filePath of noteFiles) {
-        let noteFname = null;
-        try {
-          const parsed = parseNoteFile(filePath);
-          const frontmatter = parsed.data || {};
-          noteFname = getNoteFname(frontmatter, filePath);
-          const matchingRules = findMatchingRules(rules, noteFname);
-
-          if (!matchingRules.length) {
-            summary.skipped += 1;
-            continue;
-          }
-
-          if (matchingRules.length > 1) {
-            throw new Error(`Note matches multiple rules: ${matchingRules.map((r) => r.ruleName).join(', ')}`);
-          }
-
-          summary.matched += 1;
-          const rule = matchingRules[0];
-          const schema = await getDatabaseSchema(client, schemaCache, rule.destination.databaseId);
-
-          let existingPage = null;
-          if (frontmatter.notion_url) {
-            const rawId = extractNotionIdFromUrl(frontmatter.notion_url);
-            if (!rawId) {
-              throw new Error('Unable to extract page ID from notion_url.');
-            }
-            const pageId = normalizeNotionId(rawId);
-            existingPage = await client.pages.retrieve({ page_id: pageId });
-          }
-
-          const result = await syncNote({
+      if (sourceFormat === 'csv') {
+        for (const filePath of sourceFiles) {
+          await syncCsvFile({
             client,
             filePath,
-            rule,
-            schema,
-            existingPage,
+            rules: sourceRules,
             dryRun,
+            summary,
             schemaCache,
             databaseIdCache,
             relationCache,
             env,
+            authToken: token,
           });
+        }
+      } else {
+        for (const filePath of sourceFiles) {
+          let noteFname = null;
+          try {
+            const parsed = parseNoteFile(filePath);
+            const frontmatter = parsed.data || {};
+            noteFname = getSourceFname(frontmatter, filePath);
+            const matchingRules = findMatchingRules(sourceRules, noteFname);
 
-          if (result.action === 'created' || result.action === 'would_create') {
-            summary.created += 1;
-          } else {
-            summary.updated += 1;
+            if (!matchingRules.length) {
+              summary.skipped += 1;
+              continue;
+            }
+
+            if (matchingRules.length > 1) {
+              throw new Error(`Note matches multiple rules: ${matchingRules.map((r) => r.ruleName).join(', ')}`);
+            }
+
+            summary.matched += 1;
+            const rule = matchingRules[0];
+            const schema = await getDatabaseSchema(client, schemaCache, rule.destination.databaseId);
+
+            let existingPage = null;
+            if (frontmatter.notion_url) {
+              const rawId = extractNotionIdFromUrl(frontmatter.notion_url);
+              if (!rawId) {
+                throw new Error('Unable to extract page ID from notion_url.');
+              }
+              const pageId = normalizeNotionId(rawId);
+              existingPage = await client.pages.retrieve({ page_id: pageId });
+            }
+
+            const result = await syncMarkdownFile({
+              client,
+              filePath,
+              rule,
+              schema,
+              existingPage,
+              dryRun,
+              schemaCache,
+              databaseIdCache,
+              relationCache,
+              env,
+              authToken: token,
+            });
+
+            if (result.action === 'created' || result.action === 'would_create') {
+              summary.created += 1;
+            } else {
+              summary.updated += 1;
+            }
+
+            const prefix = dryRun ? 'DRY RUN:' : '✓';
+            const url = result.url || '(new)';
+            console.log(`${prefix} ${result.action} ${noteFname} -> ${url}`);
+          } catch (err) {
+            const message = err && err.body ? JSON.stringify(err.body, null, 2) : err.message || String(err);
+            summary.errors.push({ filePath, message });
+            console.error(`! Failed ${noteFname || filePath}: ${message}`);
           }
-
-          const prefix = dryRun ? 'DRY RUN:' : '✓';
-          const url = result.url || '(new)';
-          console.log(`${prefix} ${result.action} ${noteFname} -> ${url}`);
-        } catch (err) {
-          const message = err && err.body ? JSON.stringify(err.body, null, 2) : err.message || String(err);
-          summary.errors.push({ filePath, message });
-          console.error(`! Failed ${noteFname || filePath}: ${message}`);
         }
       }
 
@@ -845,12 +1757,23 @@ module.exports = {
   },
 
   loadSyncRules,
+  normalizeCsvRule,
+  loadProcessorFunction,
   resolveNoteRoots,
+  resolveCsvRoots,
   getDatabaseSchema,
+  getSyncFieldMappings,
+  getCsvRowSyncId,
   buildProperties,
+  buildCsvSyncPayload,
+  normalizeDeferredFileAction,
+  findPageByPropertyValue,
   resolveRelationDatabaseId,
   resolveRelationIds,
   buildRelationPropertyValue,
   findPageByTitle,
-  syncNote,
+  promptForSourceFormat,
+  syncRecord,
+  syncMarkdownFile,
+  syncCsvFile,
 };

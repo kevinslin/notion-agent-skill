@@ -25,6 +25,9 @@ const {
   extractNotionIdFromUrl,
   ensureDirectoryExists,
   collectMarkdownFiles,
+  collectCsvFiles,
+  parseCsv,
+  serializeCsv,
 } = require('./sync');
 
 module.exports = {
@@ -44,6 +47,9 @@ module.exports = {
   extractNotionIdFromUrl,
   ensureDirectoryExists,
   collectMarkdownFiles,
+  collectCsvFiles,
+  parseCsv,
+  serializeCsv,
 
   // Filter parser
   parseFilter,

@@ -139,10 +139,11 @@ node notion.js sync-meta --env test --limit 10
 
 ### `sync`
 
-Sync local notes to Notion using YAML rule files in `~/.notion-agents-skill/syncRules/`.
+Sync local markdown notes or CSV files to Notion using YAML rule files in `~/.notion-agents-skill/syncRules/`.
 
 Options:
 
+- `--from`: Required source format: `md` or `csv`. If omitted in an interactive terminal, the CLI prompts for it.
 - `--rule`: Run a specific rule (matches rule filename or `name` field).
 - `--path`: Additional file or directory paths to scan (repeatable).
 - `--dry-run`: Print planned actions without writing changes.
@@ -151,21 +152,69 @@ Options:
 
 Notes:
 
-- Notes are discovered under `notes/` by default if it exists, otherwise the current working directory.
-- A note is considered synced if it has a `notion_url` field in frontmatter.
+- With `--from md`, notes are discovered under `notes/` by default if it exists, otherwise the current working directory.
+- With `--from csv`, files are discovered under the current working directory unless you provide a positional target or `--path`.
+- A markdown note is considered synced if it has a `notion_url` field in frontmatter.
+- CSV rows persist sync metadata in `dendron_id`, `notion_url`, and `last_synced` columns.
+- CSV sync requires `mapping[]` plus `destination.kind` and `destination.id`. Legacy `fmToSync` is not supported for CSV rules.
+- If a CSV row does not provide `dendron_id` or `id`, the CLI generates a deterministic `dendron_id` from the rule name plus mapped source values.
+- Multiple CSV mappings with `toType: body` are appended in mapping order, joined by a blank line.
+- `toType: file/image` appends media blocks after the page body is synced.
 - Sync replaces the page body, but preserves any NOTION_ONLY toggle blocks in Notion.
 - The destination database must include `last_synced` (date) and `dendron_id` (rich_text or similar) properties.
 
 Examples:
 
 ```bash
-node notion.js sync
-node notion.js sync ./notes/task.2025.12.28.finalize-trip.md
-node notion.js sync --dry-run
-node notion.js sync --rule task
-node notion.js sync --rules-dir ./syncRules
-node notion.js sync --path ../notes-archive
+node notion.js sync --from md
+node notion.js sync --from md ./notes/task.2025.12.28.finalize-trip.md
+node notion.js sync --from md --dry-run
+node notion.js sync --from md --rule task
+node notion.js sync --from md --rules-dir ./syncRules
+node notion.js sync --from csv ./exports/tasks.csv
+node notion.js sync --from csv --path ../exports
 ```
+
+CSV rule example:
+
+```yaml
+fnameTrigger: "task.csv-*"
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Summary
+    toType: body
+  - fromName: Screenshot
+    toType: file/image
+  - fromName: AssetPath
+    process: "./processors/upload-file.js"
+    toType: file/image
+destination:
+  kind: db
+  id: "your-database-id"
+```
+
+CSV processor contract:
+
+```ts
+type ProcessFunction = (opts: {
+  column: string;
+  value: string;
+  helper: {
+    asBody(text: string): any;
+    asFile(input: string | object): any;
+    uploadFile(input: string | object): any;
+  };
+}) => any;
+```
+
+Processor notes:
+
+- Processor paths are resolved relative to the rule file first.
+- A processor file must export a single function.
+- `helper.asBody()` returns a body fragment without requiring Notion-specific objects.
+- `helper.asFile()` and `helper.uploadFile()` create deferred file/image actions; local files are uploaded after the page is created or updated.
+- Relative file paths returned by processors are resolved against the CSV file first, then the rule directory.
 
 ### `parse-block`
 

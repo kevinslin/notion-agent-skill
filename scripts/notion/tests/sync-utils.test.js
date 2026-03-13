@@ -4,6 +4,8 @@ const {
   matchFnameTrigger,
   parseMultiSelectValues,
   mergeMultiSelectValues,
+  parseCsv,
+  serializeCsv,
 } = require('../utils/sync');
 
 describe('Sync utilities', () => {
@@ -45,5 +47,23 @@ list:
 
     const merged = mergeMultiSelectValues(['a', 'b'], ['b', 'c']);
     expect(merged).toEqual(['a', 'b', 'c']);
+  });
+
+  test('parses and serializes csv with quoted values', () => {
+    const csv = `id,Name,Notes
+1,"Alpha, Beta","line 1
+line 2"
+2,Gamma,"He said ""hello"""
+`;
+
+    const parsed = parseCsv(csv);
+    expect(parsed.headers).toEqual(['id', 'Name', 'Notes']);
+    expect(parsed.rows).toEqual([
+      { id: '1', Name: 'Alpha, Beta', Notes: 'line 1\nline 2' },
+      { id: '2', Name: 'Gamma', Notes: 'He said "hello"' },
+    ]);
+
+    const serialized = serializeCsv(parsed.headers, parsed.rows);
+    expect(parseCsv(serialized)).toEqual(parsed);
   });
 });

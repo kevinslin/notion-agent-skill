@@ -16,15 +16,15 @@ It works by providing a Codex skill definition plus a Node CLI in `scripts/notio
 cd scripts/notion
 npm install
 export NOTION_TOKEN=secret_xxx
-node notion.js list-db --limit 5 --format table
+notion list-db --limit 5 --format table
 ```
 
-If you install the local bin, you can replace `node notion.js` with `notion`.
+If `notion` is not available in your PATH, run the CLI as `node notion.js`.
 
 ## Setup
 
 - Set `NOTION_TOKEN` (or `NOTION_API_KEY`) in the environment or a `.env` file.
-- Run `node notion.js sync-meta` once to create `$HOME/.notion-cache.production.json`.
+- Run `notion sync-meta` once to create `$HOME/.notion-cache.production.json`.
 
 ## Skill usage
 
@@ -39,22 +39,22 @@ Use this skill when you want to:
 
 ```bash
 # List databases
-node notion.js list-db --limit 10 --format table
+notion list-db --limit 10 --format table
 
 # Create a page
-node notion.js create --database-id <db-id> --properties Name="Daily note" --properties Date=2026-01-29
+notion create --database-id <db-id> --properties Name="Daily note" --properties Date=2026-01-29
 
 # Sync metadata cache
-node notion.js sync-meta
+notion sync-meta
 
 # Lookup pages/databases by query
-node notion.js lookup "project alpha" --filter object:page --sort last_edited_time:descending --limit 10
+notion lookup "project alpha" --filter object:page --sort last_edited_time:descending --limit 10
 
 # Fetch pages from a database
-node notion.js fetch --database-id <db-id> --query "urgent" --output md
+notion fetch --database-id <db-id> --query "urgent" --output md
 
 # Sync notes using rules
-node notion.js sync --dry-run
+notion sync --from md --dry-run
 ```
 
 Full CLI reference lives in `scripts/notion/USAGE.md`.
@@ -72,7 +72,7 @@ printf "%s" "## Weekend grocery reminder
 - time: 08:25
 - source: SMS
 
-Please pick up apples, oats, and milk on the way home." | node notion.js parse-block
+Please pick up apples, oats, and milk on the way home." | notion parse-block
 ```
 
 ## Tests
