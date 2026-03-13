@@ -157,6 +157,7 @@ Notes:
 - A markdown note is considered synced if it has a `notion_url` field in frontmatter.
 - CSV rows persist sync metadata in `dendron_id`, `notion_url`, and `last_synced` columns.
 - CSV sync requires `mapping[]` plus `destination.kind` and `destination.id`. Legacy `fmToSync` is not supported for CSV rules.
+- `syncIdColumn` is optional for CSV rules. When provided, that source column becomes the preferred create/update identity and is persisted into `dendron_id`.
 - If a CSV row does not provide `dendron_id` or `id`, the CLI generates a deterministic `dendron_id` from the rule name plus mapped source values.
 - Multiple CSV mappings with `toType: body` are appended in mapping order, joined by a blank line.
 - `toType: file/image` appends media blocks after the page body is synced.
@@ -179,6 +180,7 @@ CSV rule example:
 
 ```yaml
 fnameTrigger: "task.csv-*"
+syncIdColumn: external_id
 mapping:
   - fromName: Name
     toName: Name
@@ -203,7 +205,7 @@ type ProcessFunction = (opts: {
   helper: {
     asBody(text: string): any;
     asFile(input: string | object): any;
-    uploadFile(input: string | object): any;
+    uploadFile(input: string | object, options?: { type?: "image" | "file" }): any;
   };
 }) => any;
 ```
@@ -213,8 +215,22 @@ Processor notes:
 - Processor paths are resolved relative to the rule file first.
 - A processor file must export a single function.
 - `helper.asBody()` returns a body fragment without requiring Notion-specific objects.
-- `helper.asFile()` and `helper.uploadFile()` create deferred file/image actions; local files are uploaded after the page is created or updated.
+- `helper.asFile()` creates deferred file/image actions when you want to return them explicitly.
+- `helper.uploadFile()` can either be returned or called imperatively inside a loop; any queued uploads are appended after the page is created or updated.
 - Relative file paths returned by processors are resolved against the CSV file first, then the rule directory.
+
+Imperative upload example:
+
+```js
+module.exports = (opts) => {
+  const data = JSON.parse(opts.value);
+  data.forEach((ent) => {
+    if (ent && ent.url) {
+      opts.helper.uploadFile(ent.url, { type: 'image' });
+    }
+  });
+};
+```
 
 ### `parse-block`
 

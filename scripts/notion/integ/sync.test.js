@@ -517,6 +517,75 @@ destination:
     }
   });
 
+  test('uses syncIdColumn as csv identity when configured', async () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const csvName = `task.sync-csv-sync-id-${uniqueSuffix()}`;
+      fs.writeFileSync(
+        path.join(workspace.syncRulesDir, 'csv-sync-id.yaml'),
+        `fnameTrigger: "task.sync-csv-sync-id-*"
+syncIdColumn: external_id
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Status
+    toName: Status
+destination:
+  kind: db
+  id: "${testDatabaseId}"
+`,
+        'utf8'
+      );
+      const externalId = `external-${uniqueSuffix()}`;
+      const csvPath = writeCsv({
+        root: workspace.root,
+        fname: csvName,
+        rows: [
+          {
+            external_id: externalId,
+            Name: `CSV SyncId ${uniqueSuffix()}`,
+            Status: 'Not started',
+          },
+        ],
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--from', 'csv', '--rule', 'csv-sync-id', csvPath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const firstSyncRows = parseCsv(fs.readFileSync(csvPath, 'utf8')).rows;
+      const originalUrl = firstSyncRows[0].notion_url;
+      expect(firstSyncRows[0].dendron_id).toBe(externalId);
+
+      writeCsv({
+        root: workspace.root,
+        fname: csvName,
+        rows: [
+          {
+            external_id: externalId,
+            Name: firstSyncRows[0].Name,
+            Status: 'Done',
+          },
+        ],
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--from', 'csv', '--rule', 'csv-sync-id', csvPath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const secondSyncRows = parseCsv(fs.readFileSync(csvPath, 'utf8')).rows;
+      expect(secondSyncRows[0].notion_url).toBe(originalUrl);
+      expect(secondSyncRows[0].dendron_id).toBe(externalId);
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
   test('requires --from in non-interactive mode', () => {
     const workspace = createTempWorkspace();
 

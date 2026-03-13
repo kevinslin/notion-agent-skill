@@ -46,6 +46,7 @@ destination:
         id: 'db-123',
         databaseId: 'db-123',
       });
+      expect(rules[0].syncIdColumn).toBeUndefined();
       expect(getSyncFieldMappings(rules[0], { Name: 'Ship it' }, 'csv')).toEqual([
         { fromName: 'Name', toName: 'Name', toType: undefined },
       ]);
@@ -152,6 +153,42 @@ destination:
 
     expect(getCsvRowSyncId({ dendron_id: 'existing', Name: 'A' }, rule)).toBe('existing');
     expect(getCsvRowSyncId({ id: 'source-id', Name: 'A' }, rule)).toBe('source-id');
+  });
+
+  test('stable csv sync id prefers syncIdColumn when configured', () => {
+    const workspace = createTempRulesWorkspace();
+
+    try {
+      writeRuleFile(
+        workspace.root,
+        'csv.yaml',
+        `fnameTrigger: "task.csv-*"
+syncIdColumn: external_id
+mapping:
+  - fromName: Name
+    toName: Name
+destination:
+  kind: db
+  id: "db-123"
+`
+      );
+
+      const [rule] = loadSyncRules(workspace.root);
+      expect(rule.syncIdColumn).toBe('external_id');
+      expect(
+        getCsvRowSyncId(
+          {
+            external_id: 'external-123',
+            dendron_id: 'persisted-metadata',
+            id: 'row-id',
+            Name: 'Ship it',
+          },
+          rule
+        )
+      ).toBe('external-123');
+    } finally {
+      workspace.cleanup();
+    }
   });
 
   test('stable csv sync id hashes mapping values deterministically', () => {
@@ -297,6 +334,78 @@ destination:
         {
           source: 'external',
           url: 'https://example.com/image.png',
+          blockType: 'image',
+        },
+      ]);
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('supports imperative helper.uploadFile calls inside process functions', async () => {
+    const workspace = createTempRulesWorkspace();
+
+    try {
+      writeRuleFile(
+        workspace.root,
+        'json-list-processor.js',
+        `module.exports = (opts) => {
+  const data = JSON.parse(opts.value);
+  data.forEach((ent) => {
+    if (ent && ent.url) {
+      opts.helper.uploadFile(ent.url, { type: 'image' });
+    }
+  });
+};
+`
+      );
+      const csvPath = writeRuleFile(workspace.root, 'rows.csv', 'ignored\n');
+      writeRuleFile(
+        workspace.root,
+        'csv.yaml',
+        `fnameTrigger: "task.csv-*"
+mapping:
+  - fromName: Assets
+    process: "./json-list-processor.js"
+    toType: file/image
+destination:
+  kind: db
+  id: "db-123"
+`
+      );
+
+      const [rule] = loadSyncRules(workspace.root);
+      const payload = await buildCsvSyncPayload({
+        client: null,
+        rule,
+        row: {
+          Assets:
+            '[{"url":"https://media.hingenexus.com/image/upload/1bn7eo08zcilbxgkn0zd.jpg","cdn_id":"1bn7eo08zcilbxgkn0zd","content_id":"33585559-3c42-45e9-8a10-d69b69a75088"},{}]',
+          dendron_id: 'csv:test',
+        },
+        schema: {
+          propNameToType: {
+            dendron_id: 'rich_text',
+            last_synced: 'date',
+            Name: 'title',
+          },
+          relationDatabaseIdByProp: {},
+          titlePropName: 'Name',
+        },
+        lastSyncedIso: '2026-03-13T00:00:00.000Z',
+        existingProperties: null,
+        schemaCache: new Map(),
+        databaseIdCache: new Map(),
+        relationCache: new Map(),
+        env: 'test',
+        dryRun: true,
+        sourceFilePath: csvPath,
+      });
+
+      expect(payload.fileActions).toEqual([
+        {
+          source: 'external',
+          url: 'https://media.hingenexus.com/image/upload/1bn7eo08zcilbxgkn0zd.jpg',
           blockType: 'image',
         },
       ]);

@@ -180,6 +180,7 @@ function normalizeCsvRule(rawRule, file, fullPath, ruleName) {
     sourceFormat: 'csv',
     ruleName,
     mapping,
+    syncIdColumn: rawRule.syncIdColumn ? String(rawRule.syncIdColumn) : undefined,
     ruleFilePath: fullPath,
     destination: {
       kind: destinationKind,
@@ -772,6 +773,12 @@ function parseCsvFile(filePath) {
 }
 
 function getCsvRowSyncId(row, rule) {
+  const configuredSyncId =
+    rule && rule.syncIdColumn && row && !isEmptyValue(row[rule.syncIdColumn]) ? row[rule.syncIdColumn] : null;
+  if (configuredSyncId) {
+    return String(configuredSyncId);
+  }
+
   const explicitId = row.dendron_id || row.id;
   if (explicitId) {
     return String(explicitId);
@@ -855,6 +862,29 @@ function createBodyHelperResult(text) {
 
 function createFileHelperResult(input) {
   return { __syncKind: 'file', input };
+}
+
+function mergeFileHelperArgs(input, options) {
+  if (options === undefined || options === null) {
+    return input;
+  }
+
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    return {
+      ...input,
+      ...options,
+    };
+  }
+
+  if (typeof input === 'string') {
+    if (isExternalUrl(input)) {
+      return { url: input, ...options };
+    }
+
+    return { path: input, ...options };
+  }
+
+  return input;
 }
 
 function isExternalUrl(rawValue) {
@@ -970,8 +1000,40 @@ function createCsvProcessHelper(context) {
   return {
     asBody: (text) => createBodyHelperResult(text),
     asFile: (input) => createFileHelperResult(input),
-    uploadFile: (input) => createFileHelperResult(input),
+    uploadFile: (input, options) => {
+      const marker = createFileHelperResult(mergeFileHelperArgs(input, options));
+      context.queuedFileResults.push(marker);
+      return marker;
+    },
   };
+}
+
+function combineProcessedOutputs(processedValue, queuedFileResults) {
+  const combined = [];
+  const seen = new Set();
+
+  const add = (value) => {
+    if (value === undefined || value === null) {
+      return;
+    }
+    if (typeof value === 'object') {
+      if (seen.has(value)) {
+        return;
+      }
+      seen.add(value);
+    }
+    combined.push(value);
+  };
+
+  for (const queued of queuedFileResults || []) {
+    add(queued);
+  }
+
+  for (const item of flattenProcessorOutput(processedValue)) {
+    add(item);
+  }
+
+  return combined;
 }
 
 function normalizePrimitiveMappingValue(value, toType) {
@@ -1011,9 +1073,11 @@ async function buildCsvSyncPayload({
   const properties = {};
   const bodyFragments = [];
   const fileActions = [];
+  const helperContext = { queuedFileResults: [] };
   const helper = createCsvProcessHelper({
     sourceFilePath,
     ruleFilePath: rule.ruleFilePath,
+    queuedFileResults: helperContext.queuedFileResults,
   });
   const fileContext = {
     baseDirs: [
@@ -1028,15 +1092,20 @@ async function buildCsvSyncPayload({
       continue;
     }
 
+    helperContext.queuedFileResults.length = 0;
     const processedValue = mapping.processFn
       ? await mapping.processFn({ column: mapping.fromName, value: rawValue, helper })
       : rawValue;
 
-    if (isEmptyValue(processedValue)) {
+    const processedItems = mapping.processFn
+      ? combineProcessedOutputs(processedValue, helperContext.queuedFileResults)
+      : flattenProcessorOutput(processedValue);
+
+    if (!processedItems.length || processedItems.every((item) => isEmptyValue(item))) {
       continue;
     }
 
-    for (const item of flattenProcessorOutput(processedValue)) {
+    for (const item of processedItems) {
       if (item && typeof item === 'object' && item.__syncKind === 'body') {
         if (!isEmptyValue(item.text)) {
           bodyFragments.push(String(item.text));
@@ -1489,8 +1558,9 @@ async function syncCsvFile({
       summary.matched += 1;
       const rule = matchingRules[0];
       const schema = await getDatabaseSchema(client, schemaCache, rule.destination.databaseId);
-      if (!row.dendron_id) {
-        row.dendron_id = getCsvRowSyncId(row, rule);
+      const syncId = getCsvRowSyncId(row, rule);
+      if (row.dendron_id !== syncId) {
+        row.dendron_id = syncId;
       }
 
       let existingPage = null;
