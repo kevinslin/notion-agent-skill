@@ -1,3 +1,4 @@
+// @ts-nocheck
 const { Client } = require('@notionhq/client');
 const { coerceValueForPropertyType, parseBodyInput, markdownToParagraphBlocks } = require('../utils');
 

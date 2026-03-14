@@ -1,8 +1,5 @@
-const { normalizeNotionId } = require('./helpers');
+import { normalizeNotionId } from './helpers';
 
-/**
- * Token types for filter parsing
- */
 const TokenType = {
   LPAREN: 'LPAREN',
   RPAREN: 'RPAREN',
@@ -10,40 +7,61 @@ const TokenType = {
   OR: 'OR',
   FILTER: 'FILTER',
   EOF: 'EOF',
+} as const;
+
+type TokenTypeValue = (typeof TokenType)[keyof typeof TokenType];
+
+type ParsedFilterExpression = {
+  property: string;
+  operator: string;
+  value: string;
 };
+
+type FilterToken = {
+  type: TokenTypeValue;
+  value: ParsedFilterExpression | string | null;
+};
+
+export type FilterAst =
+  | {
+      type: 'filter';
+      property: string;
+      operator: string;
+      value: string;
+    }
+  | {
+      type: 'and' | 'or';
+      filters: FilterAst[];
+    };
+
+type PropertySchema = Record<string, string>;
 
 /**
  * Tokenize a filter string into parseable tokens
- * @param {string} filterString - Raw filter string
- * @returns {Array<{type: string, value: any}>} Array of tokens
  */
-function tokenize(filterString) {
-  const tokens = [];
+export function tokenize(filterString: string): FilterToken[] {
+  const tokens: FilterToken[] = [];
   let i = 0;
   const str = filterString.trim();
 
   while (i < str.length) {
-    // Skip whitespace
     if (/\s/.test(str[i])) {
-      i++;
+      i += 1;
       continue;
     }
 
-    // Left parenthesis
     if (str[i] === '(') {
       tokens.push({ type: TokenType.LPAREN, value: '(' });
-      i++;
+      i += 1;
       continue;
     }
 
-    // Right parenthesis
     if (str[i] === ')') {
       tokens.push({ type: TokenType.RPAREN, value: ')' });
-      i++;
+      i += 1;
       continue;
     }
 
-    // Check for AND/OR keywords
     const remaining = str.slice(i);
     const andMatch = remaining.match(/^(AND|and)\b/);
     const orMatch = remaining.match(/^(OR|or)\b/);
@@ -60,7 +78,6 @@ function tokenize(filterString) {
       continue;
     }
 
-    // Parse filter expression: property:operator:value
     const filterMatch = parseFilterExpression(str, i);
     if (filterMatch) {
       tokens.push({
@@ -78,80 +95,71 @@ function tokenize(filterString) {
   return tokens;
 }
 
-/**
- * Parse a filter expression starting at given index
- * @param {string} str - Full filter string
- * @param {number} startIndex - Starting position
- * @returns {{filter: {property: string, operator: string, value: string}, endIndex: number} | null}
- */
-function parseFilterExpression(str, startIndex) {
+function parseFilterExpression(
+  str: string,
+  startIndex: number,
+): { filter: ParsedFilterExpression; endIndex: number } | null {
   let i = startIndex;
-  const parts = [];
+  const parts: string[] = [];
   let currentPart = '';
   let inQuotes = false;
-  let quoteChar = null;
+  let quoteChar: string | null = null;
   let colonCount = 0;
 
   while (i < str.length) {
     const char = str[i];
 
-    // Handle quotes
     if ((char === '"' || char === "'") && (i === startIndex || str[i - 1] !== '\\')) {
       if (!inQuotes) {
         inQuotes = true;
         quoteChar = char;
-        i++;
+        i += 1;
         continue;
-      } else if (char === quoteChar) {
+      }
+
+      if (char === quoteChar) {
         inQuotes = false;
         quoteChar = null;
-        i++;
+        i += 1;
         continue;
       }
     }
 
-    // If in quotes, add everything to current part
     if (inQuotes) {
       currentPart += char;
-      i++;
+      i += 1;
       continue;
     }
 
-    // Colon separator (not in quotes)
     if (char === ':') {
       if (colonCount >= 2) {
-        // This is part of the value (e.g., timestamp with colons)
         currentPart += char;
       } else {
         parts.push(currentPart);
         currentPart = '';
-        colonCount++;
+        colonCount += 1;
       }
-      i++;
+      i += 1;
       continue;
     }
 
-    // Stop at whitespace, parentheses, or AND/OR (not in quotes)
     if (/\s/.test(char) || char === '(' || char === ')') {
       break;
     }
 
-    // Check if we're at start of AND/OR
     const remaining = str.slice(i);
     if (/^(AND|and|OR|or)\b/.test(remaining)) {
       break;
     }
 
     currentPart += char;
-    i++;
+    i += 1;
   }
 
-  // Add final part
   if (currentPart) {
     parts.push(currentPart);
   }
 
-  // Validate we have exactly 3 parts
   if (parts.length !== 3) {
     return null;
   }
@@ -171,36 +179,28 @@ function parseFilterExpression(str, startIndex) {
   };
 }
 
-/**
- * Parser for filter expressions
- */
-class FilterParser {
-  constructor(tokens) {
+export class FilterParser {
+  private readonly tokens: FilterToken[];
+
+  private position = 0;
+
+  constructor(tokens: FilterToken[]) {
     this.tokens = tokens;
-    this.position = 0;
   }
 
-  currentToken() {
+  currentToken(): FilterToken {
     return this.tokens[this.position];
   }
 
-  peek() {
-    return this.tokens[this.position + 1] || { type: TokenType.EOF };
+  peek(): FilterToken {
+    return this.tokens[this.position + 1] || { type: TokenType.EOF, value: null };
   }
 
-  advance() {
-    this.position++;
+  advance(): void {
+    this.position += 1;
   }
 
-  /**
-   * Parse the filter expression
-   * Grammar (with precedence: OR > AND):
-   *   expression := andExpression
-   *   andExpression := orExpression (AND orExpression)*
-   *   orExpression := primary (OR primary)*
-   *   primary := FILTER | LPAREN expression RPAREN
-   */
-  parse() {
+  parse(): FilterAst {
     const ast = this.parseAndExpression();
     if (this.currentToken().type !== TokenType.EOF) {
       throw new Error(`Unexpected token after expression: ${JSON.stringify(this.currentToken())}`);
@@ -208,14 +208,13 @@ class FilterParser {
     return ast;
   }
 
-  parseAndExpression() {
+  private parseAndExpression(): FilterAst {
     let left = this.parseOrExpression();
 
     while (this.currentToken().type === TokenType.AND) {
-      this.advance(); // consume AND
+      this.advance();
       const right = this.parseOrExpression();
 
-      // Combine into AND node
       if (left.type === 'and') {
         left.filters.push(right);
       } else {
@@ -229,14 +228,13 @@ class FilterParser {
     return left;
   }
 
-  parseOrExpression() {
+  private parseOrExpression(): FilterAst {
     let left = this.parsePrimary();
 
     while (this.currentToken().type === TokenType.OR) {
-      this.advance(); // consume OR
+      this.advance();
       const right = this.parsePrimary();
 
-      // Combine into OR node
       if (left.type === 'or') {
         left.filters.push(right);
       } else {
@@ -250,26 +248,27 @@ class FilterParser {
     return left;
   }
 
-  parsePrimary() {
+  private parsePrimary(): FilterAst {
     const token = this.currentToken();
 
     if (token.type === TokenType.FILTER) {
+      const value = token.value as ParsedFilterExpression;
       this.advance();
       return {
         type: 'filter',
-        property: token.value.property,
-        operator: token.value.operator,
-        value: token.value.value,
+        property: value.property,
+        operator: value.operator,
+        value: value.value,
       };
     }
 
     if (token.type === TokenType.LPAREN) {
-      this.advance(); // consume (
+      this.advance();
       const expr = this.parseAndExpression();
       if (this.currentToken().type !== TokenType.RPAREN) {
         throw new Error('Expected closing parenthesis');
       }
-      this.advance(); // consume )
+      this.advance();
       return expr;
     }
 
@@ -277,10 +276,7 @@ class FilterParser {
   }
 }
 
-/**
- * Property type to Notion API property name mapping
- */
-const PROPERTY_TYPE_TO_API_KEY = {
+const PROPERTY_TYPE_TO_API_KEY: Record<string, string> = {
   title: 'title',
   rich_text: 'rich_text',
   number: 'number',
@@ -303,10 +299,7 @@ const PROPERTY_TYPE_TO_API_KEY = {
   status: 'status',
 };
 
-/**
- * Valid operators for each property type
- */
-const VALID_OPERATORS = {
+const VALID_OPERATORS: Record<string, string[]> = {
   title: ['equals', 'does_not_equal', 'contains', 'does_not_contain', 'starts_with', 'ends_with', 'is_empty', 'is_not_empty'],
   rich_text: ['equals', 'does_not_equal', 'contains', 'does_not_contain', 'starts_with', 'ends_with', 'is_empty', 'is_not_empty'],
   number: ['equals', 'does_not_equal', 'greater_than', 'greater_than_or_equal_to', 'less_than', 'less_than_or_equal_to', 'is_empty', 'is_not_empty'],
@@ -322,9 +315,6 @@ const VALID_OPERATORS = {
   last_edited_time: ['equals', 'before', 'after', 'on_or_before', 'on_or_after', 'is_empty', 'is_not_empty', 'past_week', 'past_month', 'past_year', 'next_week', 'next_month', 'next_year', 'this_week'],
 };
 
-/**
- * Operators that don't take a value (they use empty object or boolean)
- */
 const EMPTY_VALUE_OPERATORS = [
   'is_empty',
   'is_not_empty',
@@ -339,69 +329,54 @@ const EMPTY_VALUE_OPERATORS = [
 
 const ID_OPERATORS = ['equals', 'does_not_equal', 'greater_than'];
 
-/**
- * Convert AST to Notion API filter format
- * @param {Object} ast - Abstract syntax tree
- * @param {Object} propertySchema - Map of property name to property type
- * @returns {Object} Notion API filter object
- */
-function astToNotionFilter(ast, propertySchema) {
+export function astToNotionFilter(ast: FilterAst, propertySchema: PropertySchema): Record<string, unknown> {
   if (ast.type === 'filter') {
     return convertSingleFilter(ast, propertySchema);
   }
 
   if (ast.type === 'and' || ast.type === 'or') {
     return {
-      [ast.type]: ast.filters.map((f) => astToNotionFilter(f, propertySchema)),
+      [ast.type]: ast.filters.map((filter) => astToNotionFilter(filter, propertySchema)),
     };
   }
 
-  throw new Error(`Unknown AST node type: ${ast.type}`);
+  throw new Error(`Unknown AST node type: ${(ast as { type?: string }).type}`);
 }
 
-/**
- * Convert a single filter AST node to Notion API format
- * @param {Object} filterNode - Filter AST node
- * @param {Object} propertySchema - Map of property name to property type
- * @returns {Object} Notion API filter object
- */
-function convertSingleFilter(filterNode, propertySchema) {
+function convertSingleFilter(
+  filterNode: Extract<FilterAst, { type: 'filter' }>,
+  propertySchema: PropertySchema,
+): Record<string, unknown> {
   const { property, operator, value } = filterNode;
 
-  // Special handling for timestamp properties
   if (property === 'created_time' || property === 'last_edited_time') {
     return convertTimestampFilter(property, operator, value);
   }
 
-  // Special handling for page id
   if (property === 'id') {
     return convertIdFilter(operator, value);
   }
 
-  // Get property type from schema
   const propertyType = propertySchema[property];
   if (!propertyType) {
     const availableProps = Object.keys(propertySchema).join(', ');
     throw new Error(
-      `Property "${property}" not found in database schema. Available properties: ${availableProps}`
+      `Property "${property}" not found in database schema. Available properties: ${availableProps}`,
     );
   }
 
-  // Validate operator for this property type
   const validOps = VALID_OPERATORS[propertyType];
   if (!validOps || !validOps.includes(operator)) {
     throw new Error(
-      `Operator "${operator}" is not valid for property "${property}" (type: ${propertyType}). Valid operators: ${validOps ? validOps.join(', ') : 'none'}`
+      `Operator "${operator}" is not valid for property "${property}" (type: ${propertyType}). Valid operators: ${validOps ? validOps.join(', ') : 'none'}`,
     );
   }
 
-  // Get the API key for this property type
   const apiKey = PROPERTY_TYPE_TO_API_KEY[propertyType];
   if (!apiKey) {
     throw new Error(`Unsupported property type: ${propertyType}`);
   }
 
-  // Convert value based on property type
   const convertedValue = convertFilterValue(propertyType, operator, value);
 
   return {
@@ -412,23 +387,15 @@ function convertSingleFilter(filterNode, propertySchema) {
   };
 }
 
-/**
- * Convert timestamp filter (created_time, last_edited_time)
- * @param {string} property - created_time or last_edited_time
- * @param {string} operator - Filter operator
- * @param {string} value - Filter value
- * @returns {Object} Notion API timestamp filter
- */
-function convertTimestampFilter(property, operator, value) {
+function convertTimestampFilter(property: string, operator: string, value: string): Record<string, unknown> {
   const validOps = VALID_OPERATORS[property];
   if (!validOps || !validOps.includes(operator)) {
     throw new Error(
-      `Operator "${operator}" is not valid for timestamp property "${property}". Valid operators: ${validOps.join(', ')}`
+      `Operator "${operator}" is not valid for timestamp property "${property}". Valid operators: ${validOps.join(', ')}`,
     );
   }
 
-  // is_empty and is_not_empty should be boolean true
-  let convertedValue;
+  let convertedValue: boolean | string | Record<string, never>;
   if (operator === 'is_empty' || operator === 'is_not_empty') {
     convertedValue = true;
   } else if (EMPTY_VALUE_OPERATORS.includes(operator)) {
@@ -445,20 +412,11 @@ function convertTimestampFilter(property, operator, value) {
   };
 }
 
-/**
- * Convert filter value based on property type and operator
- * @param {string} propertyType - Type of the property
- * @param {string} operator - Filter operator
- * @param {string} value - Raw value string
- * @returns {any} Converted value for Notion API
- */
-function convertFilterValue(propertyType, operator, value) {
-  // is_empty and is_not_empty should be boolean true
+function convertFilterValue(propertyType: string, operator: string, value: string): boolean | number | string | Record<string, never> {
   if (operator === 'is_empty' || operator === 'is_not_empty') {
     return true;
   }
 
-  // Other operators that don't take a value (timestamp operators)
   if (EMPTY_VALUE_OPERATORS.includes(operator)) {
     return {};
   }
@@ -472,17 +430,18 @@ function convertFilterValue(propertyType, operator, value) {
       return num;
     }
 
-    case 'checkbox': {
-      if (value === 'true') return true;
-      if (value === 'false') return false;
+    case 'checkbox':
+      if (value === 'true') {
+        return true;
+      }
+      if (value === 'false') {
+        return false;
+      }
       throw new Error(`Checkbox value must be "true" or "false", got: "${value}"`);
-    }
 
     case 'people':
-    case 'relation': {
-      // UUID value
+    case 'relation':
       return normalizeNotionId(value) || value;
-    }
 
     case 'title':
     case 'rich_text':
@@ -498,44 +457,23 @@ function convertFilterValue(propertyType, operator, value) {
   }
 }
 
-/**
- * Parse a filter string and convert to Notion API filter format
- * @param {string} filterString - Filter string (e.g., "Name:contains:test AND Status:equals:Done")
- * @param {Object} propertySchema - Map of property name to property type from database schema
- * @returns {Object | null} Notion API filter object, or null if filterString is empty
- * @throws {Error} If filter syntax is invalid or properties/operators are invalid
- *
- * @example
- * const schema = { Name: 'title', Status: 'status', Priority: 'number' };
- * const filter = parseFilter('Name:contains:test AND Priority:greater_than:5', schema);
- * // Returns: { and: [ { property: 'Name', title: { contains: 'test' } }, { property: 'Priority', number: { greater_than: 5 } } ] }
- */
-function parseFilter(filterString, propertySchema) {
+export function parseFilter(
+  filterString: string | null | undefined,
+  propertySchema: PropertySchema,
+): Record<string, unknown> | null {
   if (!filterString || !filterString.trim()) {
     return null;
   }
 
-  // Tokenize
   const tokens = tokenize(filterString);
-
-  // Parse into AST
   const parser = new FilterParser(tokens);
   const ast = parser.parse();
   validateNestingDepth(ast);
 
-  // Convert AST to Notion API format
-  const notionFilter = astToNotionFilter(ast, propertySchema);
-
-  return notionFilter;
+  return astToNotionFilter(ast, propertySchema);
 }
 
-/**
- * Validate filter nesting depth (max 2 levels for Notion API)
- * @param {Object} ast - Abstract syntax tree
- * @param {number} currentDepth - Current nesting depth
- * @throws {Error} If nesting exceeds maximum depth
- */
-function validateNestingDepth(ast, currentDepth = 0) {
+export function validateNestingDepth(ast: FilterAst, currentDepth = 0): void {
   if (ast.type !== 'and' && ast.type !== 'or') {
     return;
   }
@@ -549,16 +487,10 @@ function validateNestingDepth(ast, currentDepth = 0) {
   }
 }
 
-/**
- * Convert page id filter to Notion API format
- * @param {string} operator - Filter operator
- * @param {string} value - Raw id value
- * @returns {Object} Notion API id filter object
- */
-function convertIdFilter(operator, value) {
+function convertIdFilter(operator: string, value: string): Record<string, unknown> {
   if (!ID_OPERATORS.includes(operator)) {
     throw new Error(
-      `Operator "${operator}" is not valid for property "id". Valid operators: ${ID_OPERATORS.join(', ')}`
+      `Operator "${operator}" is not valid for property "id". Valid operators: ${ID_OPERATORS.join(', ')}`,
     );
   }
 
@@ -569,11 +501,3 @@ function convertIdFilter(operator, value) {
     },
   };
 }
-
-module.exports = {
-  parseFilter,
-  tokenize,
-  FilterParser,
-  astToNotionFilter,
-  validateNestingDepth,
-};

@@ -104,7 +104,7 @@ function coerceDateTimeProperties(properties) {
  * Parse a markdown block from stdin into structured metadata.
  *
  * Usage:
- *   echo "## Title\n- key: value\n\nBody" | node notion.js parse-block
+ *   echo "## Title\n- key: value\n\nBody" | node dist/notion.js parse-block
  *
  * Outputs JSON:
  *   { "title": "...", "properties": {...}, "body": "..." }
@@ -146,5 +146,4 @@ module.exports = {
   normalizeDateTimeString,
   coerceDateTimeProperties,
 };
-
 

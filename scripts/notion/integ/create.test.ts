@@ -1,3 +1,4 @@
+// @ts-nocheck
 const { Client } = require('@notionhq/client');
 const path = require('path');
 const fs = require('fs');

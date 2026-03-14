@@ -1,4 +1,6 @@
+// @ts-nocheck
 const { Client } = require('@notionhq/client');
+const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
@@ -66,8 +68,22 @@ describe('Lookup Command Integration Tests', () => {
     }
   });
 
+  function resolveCliScriptPath() {
+    const candidates = [
+      path.join(__dirname, '..', 'dist', 'notion.js'),
+      path.join(__dirname, '..', 'notion.js'),
+    ];
+    const resolved = candidates.find((candidate) => fs.existsSync(candidate));
+
+    if (!resolved) {
+      throw new Error(`Could not find compiled CLI entrypoint. Checked: ${candidates.join(', ')}`);
+    }
+
+    return resolved;
+  }
+
   async function runLookup(args) {
-    const scriptPath = path.join(__dirname, '..', 'notion.js');
+    const scriptPath = resolveCliScriptPath();
     const cwd = path.join(__dirname, '..');
     const env = { ...process.env, NODE_ENV: 'test' };
 

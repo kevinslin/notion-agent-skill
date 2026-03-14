@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "moduleDetection": "force",
+    "rootDir": ".",
+    "outDir": "dist",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node", "jest"]
+  },
+  "include": [
+    "notion.ts",
+    "commands/**/*.ts",
+    "utils/**/*.ts",
+    "tests/**/*.ts",
+    "integ/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

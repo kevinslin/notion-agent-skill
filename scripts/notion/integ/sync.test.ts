@@ -24,10 +24,24 @@ try {
 
 jest.setTimeout(45000);
 
+function resolveCliScriptPath() {
+  const candidates = [
+    path.resolve(__dirname, '..', 'dist', 'notion.js'),
+    path.resolve(__dirname, '..', 'notion.js'),
+  ];
+  const resolved = candidates.find((candidate) => fs.existsSync(candidate));
+
+  if (!resolved) {
+    throw new Error(`Could not find compiled CLI entrypoint. Checked: ${candidates.join(', ')}`);
+  }
+
+  return resolved;
+}
+
 describe('Sync Command Integration Tests', () => {
   let client;
   let testDatabaseId;
-  const notionCliPath = path.resolve(__dirname, '..', 'notion.js');
+  const notionCliPath = resolveCliScriptPath();
 
   beforeAll(() => {
     const token = process.env.NOTION_TOKEN;

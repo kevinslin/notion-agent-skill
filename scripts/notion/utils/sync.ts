@@ -1,8 +1,18 @@
-const fs = require('fs');
-const path = require('path');
-const yaml = require('js-yaml');
+import * as fs from 'fs';
+import * as path from 'path';
+import * as yaml from 'js-yaml';
 
-function parseFrontmatter(markdown) {
+type FrontmatterData = Record<string, unknown>;
+
+export type FrontmatterParseResult = {
+  data: FrontmatterData;
+  body: string;
+  hasFrontmatter: boolean;
+};
+
+export type CsvRow = Record<string, string>;
+
+export function parseFrontmatter(markdown?: string | null): FrontmatterParseResult {
   if (!markdown || typeof markdown !== 'string') {
     return { data: {}, body: '', hasFrontmatter: false };
   }
@@ -26,11 +36,11 @@ function parseFrontmatter(markdown) {
   }
 
   const yamlText = lines.slice(1, endIndex).join('\n');
-  let data = {};
+  let data: FrontmatterData = {};
   if (yamlText.trim()) {
     const parsed = yaml.load(yamlText);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      data = parsed;
+      data = parsed as FrontmatterData;
     }
   }
 
@@ -48,7 +58,7 @@ function parseFrontmatter(markdown) {
   };
 }
 
-function serializeFrontmatter(data, body) {
+export function serializeFrontmatter(data: FrontmatterData | null | undefined, body?: string): string {
   const safeData = data && typeof data === 'object' ? data : {};
   const yamlText = yaml.dump(safeData, { lineWidth: 120, noRefs: true }).trimEnd();
   const trimmedBody = typeof body === 'string' ? body.replace(/\s+$/, '') : '';
@@ -61,19 +71,23 @@ function serializeFrontmatter(data, body) {
   return `${parts.join('\n')}\n`;
 }
 
-function escapeRegex(raw) {
+function escapeRegex(raw: string): string {
   return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function matchFnameTrigger(fname, trigger) {
-  if (!fname || !trigger) return false;
+export function matchFnameTrigger(fname?: string | null, trigger?: string | null): boolean {
+  if (!fname || !trigger) {
+    return false;
+  }
   const pattern = `^${escapeRegex(trigger).replace(/\\\*/g, '.*')}$`;
   const regex = new RegExp(pattern);
   return regex.test(fname);
 }
 
-function parseMultiSelectValues(raw) {
-  if (raw === undefined || raw === null) return [];
+export function parseMultiSelectValues(raw: unknown): string[] {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
   if (Array.isArray(raw)) {
     return raw.map((item) => String(item).trim()).filter(Boolean);
   }
@@ -86,12 +100,14 @@ function parseMultiSelectValues(raw) {
   return [String(raw).trim()].filter(Boolean);
 }
 
-function mergeMultiSelectValues(existing, incoming) {
-  const seen = new Set();
-  const merged = [];
+export function mergeMultiSelectValues(existing: string[] | null | undefined, incoming: string[] | null | undefined): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
 
-  const addValue = (value) => {
-    if (!value || seen.has(value)) return;
+  const addValue = (value: string) => {
+    if (!value || seen.has(value)) {
+      return;
+    }
     seen.add(value);
     merged.push(value);
   };
@@ -102,8 +118,8 @@ function mergeMultiSelectValues(existing, incoming) {
   return merged;
 }
 
-function formatLocalDateTime(date) {
-  const pad = (value) => String(value).padStart(2, '0');
+export function formatLocalDateTime(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
   return [
     date.getFullYear(),
     pad(date.getMonth() + 1),
@@ -111,10 +127,14 @@ function formatLocalDateTime(date) {
   ].join('-') + ` ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function extractNotionIdFromUrl(rawUrl) {
-  if (!rawUrl || typeof rawUrl !== 'string') return null;
+export function extractNotionIdFromUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl || typeof rawUrl !== 'string') {
+    return null;
+  }
   const dashed = rawUrl.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i);
-  if (dashed) return dashed[0];
+  if (dashed) {
+    return dashed[0];
+  }
   const compact = rawUrl.match(/[a-f0-9]{32}/i);
   if (compact) {
     return compact[0];
@@ -122,7 +142,7 @@ function extractNotionIdFromUrl(rawUrl) {
   return null;
 }
 
-function ensureDirectoryExists(dirPath) {
+export function ensureDirectoryExists(dirPath: string): void {
   if (!fs.existsSync(dirPath)) {
     throw new Error(`Directory does not exist: ${dirPath}`);
   }
@@ -131,9 +151,11 @@ function ensureDirectoryExists(dirPath) {
   }
 }
 
-function collectMarkdownFiles(rootPath, ignoreDirs = new Set()) {
-  const results = [];
-  if (!fs.existsSync(rootPath)) return results;
+export function collectMarkdownFiles(rootPath: string, ignoreDirs: Set<string> = new Set()): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(rootPath)) {
+    return results;
+  }
 
   const stats = fs.statSync(rootPath);
   if (stats.isFile()) {
@@ -143,7 +165,9 @@ function collectMarkdownFiles(rootPath, ignoreDirs = new Set()) {
     return results;
   }
 
-  if (!stats.isDirectory()) return results;
+  if (!stats.isDirectory()) {
+    return results;
+  }
 
   const entries = fs.readdirSync(rootPath, { withFileTypes: true });
   for (const entry of entries) {
@@ -161,9 +185,11 @@ function collectMarkdownFiles(rootPath, ignoreDirs = new Set()) {
   return results;
 }
 
-function collectFilesByExtension(rootPath, extension, ignoreDirs = new Set()) {
-  const results = [];
-  if (!fs.existsSync(rootPath)) return results;
+function collectFilesByExtension(rootPath: string, extension: string, ignoreDirs: Set<string> = new Set()): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(rootPath)) {
+    return results;
+  }
 
   const stats = fs.statSync(rootPath);
   if (stats.isFile()) {
@@ -173,7 +199,9 @@ function collectFilesByExtension(rootPath, extension, ignoreDirs = new Set()) {
     return results;
   }
 
-  if (!stats.isDirectory()) return results;
+  if (!stats.isDirectory()) {
+    return results;
+  }
 
   const entries = fs.readdirSync(rootPath, { withFileTypes: true });
   for (const entry of entries) {
@@ -191,17 +219,17 @@ function collectFilesByExtension(rootPath, extension, ignoreDirs = new Set()) {
   return results;
 }
 
-function collectCsvFiles(rootPath, ignoreDirs = new Set()) {
+export function collectCsvFiles(rootPath: string, ignoreDirs: Set<string> = new Set()): string[] {
   return collectFilesByExtension(rootPath, '.csv', ignoreDirs);
 }
 
-function parseCsv(csvText) {
+export function parseCsv(csvText?: string | null): { headers: string[]; rows: CsvRow[] } {
   if (!csvText || typeof csvText !== 'string') {
     return { headers: [], rows: [] };
   }
 
-  const rawRows = [];
-  let row = [];
+  const rawRows: string[][] = [];
+  let row: string[] = [];
   let field = '';
   let inQuotes = false;
 
@@ -260,7 +288,7 @@ function parseCsv(csvText) {
 
   const headers = normalizedRows[0].map((header) => String(header || '').trim());
   const rows = normalizedRows.slice(1).map((cells) => {
-    const record = {};
+    const record: CsvRow = {};
     headers.forEach((header, index) => {
       if (!header) {
         return;
@@ -273,7 +301,7 @@ function parseCsv(csvText) {
   return { headers, rows };
 }
 
-function escapeCsvValue(value) {
+function escapeCsvValue(value: unknown): string {
   const stringValue = value === undefined || value === null ? '' : String(value);
   if (!/[",\n\r]/.test(stringValue)) {
     return stringValue;
@@ -281,7 +309,7 @@ function escapeCsvValue(value) {
   return `"${stringValue.replace(/"/g, '""')}"`;
 }
 
-function serializeCsv(headers, rows) {
+export function serializeCsv(headers: string[] | null | undefined, rows: CsvRow[] | null | undefined): string {
   const safeHeaders = Array.isArray(headers) ? headers.filter(Boolean) : [];
   if (!safeHeaders.length) {
     return '';
@@ -294,18 +322,3 @@ function serializeCsv(headers, rows) {
 
   return `${lines.join('\n')}\n`;
 }
-
-module.exports = {
-  parseFrontmatter,
-  serializeFrontmatter,
-  matchFnameTrigger,
-  parseMultiSelectValues,
-  mergeMultiSelectValues,
-  formatLocalDateTime,
-  extractNotionIdFromUrl,
-  ensureDirectoryExists,
-  collectMarkdownFiles,
-  collectCsvFiles,
-  parseCsv,
-  serializeCsv,
-};

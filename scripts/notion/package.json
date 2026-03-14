@@ -4,12 +4,14 @@
   "private": true,
   "type": "commonjs",
   "bin": {
-    "notion": "./notion.js"
+    "notion": "./dist/notion.js"
   },
   "scripts": {
-    "test": "jest --config jest.unit.config.js",
+    "build": "tsc --project tsconfig.json",
+    "test": "npm run test:unit",
     "test:unit": "jest --config jest.unit.config.js",
-    "test:integ": "jest --config jest.integ.config.js"
+    "test:integ": "jest --config jest.integ.config.js",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.15",
@@ -19,6 +21,11 @@
     "yargs": "^17.7.2"
   },
   "devDependencies": {
-    "jest": "^29.7.0"
+    "@types/jest": "^29.5.14",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.13.10",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.6",
+    "typescript": "^5.8.2"
   }
 }

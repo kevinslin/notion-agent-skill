@@ -3,14 +3,15 @@
 Notion CLI creates pages, syncs notes, and syncs database metadata from your Notion workspace.
 It uses the official Notion API and reads your integration token from the environment or a `.env` file.
 
-Commands below use `node notion.js`. If you have a local bin set up, replace that with `notion`.
+Commands below use `node dist/notion.js`. If you have a local bin set up, replace that with `notion`.
 
 ## Quickstart
 
 ```bash
 npm install
+npm run build
 export NOTION_TOKEN=secret_xxx
-node notion.js list-db --limit 5 --format table
+node dist/notion.js list-db --limit 5 --format table
 ```
 
 ## Authentication
@@ -33,8 +34,8 @@ Options:
 Examples:
 
 ```bash
-node notion.js create --database-id <db-id> --properties Name="Daily note" --properties Date=2026-01-29
-node notion.js create --database-id <db-id> --properties Name="Release notes" --bodyFromTextFile ./notes.md
+node dist/notion.js create --database-id <db-id> --properties Name="Daily note" --properties Date=2026-01-29
+node dist/notion.js create --database-id <db-id> --properties Name="Release notes" --bodyFromTextFile ./notes.md
 ```
 
 ### `list-db`
@@ -49,8 +50,8 @@ Options:
 Examples:
 
 ```bash
-node notion.js list-db
-node notion.js list-db --limit 10 --format table
+node dist/notion.js list-db
+node dist/notion.js list-db --limit 10 --format table
 ```
 
 ### `lookup`
@@ -69,9 +70,9 @@ Options:
 Examples:
 
 ```bash
-node notion.js lookup "project alpha"
-node notion.js lookup "project alpha" --filter object:page --sort last_edited_time:descending --limit 10
-node notion.js lookup --filter object:database --format table
+node dist/notion.js lookup "project alpha"
+node dist/notion.js lookup "project alpha" --filter object:page --sort last_edited_time:descending --limit 10
+node dist/notion.js lookup --filter object:database --format table
 ```
 
 ### `fetch`
@@ -91,9 +92,9 @@ Options:
 Examples:
 
 ```bash
-node notion.js fetch --database-id <db-id>
-node notion.js fetch --database-name "Tasks" --query "urgent"
-node notion.js fetch --database-id <db-id> --filters "Status:equals:Done" --output md
+node dist/notion.js fetch --database-id <db-id>
+node dist/notion.js fetch --database-name "Tasks" --query "urgent"
+node dist/notion.js fetch --database-id <db-id> --filters "Status:equals:Done" --output md
 ```
 
 Output (JSON):
@@ -133,8 +134,8 @@ Options:
 Examples:
 
 ```bash
-node notion.js sync-meta
-node notion.js sync-meta --env test --limit 10
+node dist/notion.js sync-meta
+node dist/notion.js sync-meta --env test --limit 10
 ```
 
 ### `sync`
@@ -172,14 +173,14 @@ Notes:
 Examples:
 
 ```bash
-node notion.js sync --from md
-node notion.js sync --from md ./notes/task.2025.12.28.finalize-trip.md
-node notion.js sync --from md --dry-run
-node notion.js sync --from md --rule task
-node notion.js sync --from md --rules-dir ./syncRules
-node notion.js sync --from csv ./exports/tasks.csv
-node notion.js sync --from csv --path ../exports
-node notion.js sync --from csv --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv
+node dist/notion.js sync --from md
+node dist/notion.js sync --from md ./notes/task.2025.12.28.finalize-trip.md
+node dist/notion.js sync --from md --dry-run
+node dist/notion.js sync --from md --rule task
+node dist/notion.js sync --from md --rules-dir ./syncRules
+node dist/notion.js sync --from csv ./exports/tasks.csv
+node dist/notion.js sync --from csv --path ../exports
+node dist/notion.js sync --from csv --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv
 ```
 
 CSV rule example:
@@ -256,7 +257,7 @@ echo "## Weekend grocery reminder
 - time: 08:25
 - source: SMS
 
-Please pick up apples, oats, and milk on the way home." | node notion.js parse-block
+Please pick up apples, oats, and milk on the way home." | node dist/notion.js parse-block
 ```
 
 Outputs:
@@ -284,8 +285,8 @@ Options:
 Examples:
 
 ```bash
-node notion.js status
-node notion.js status --limit 5
+node dist/notion.js status
+node dist/notion.js status --limit 5
 ```
 
 ## Property value rules (for `create`)
@@ -304,6 +305,6 @@ Markdown is converted to paragraph blocks only. Headings, lists, and other block
 ## Help and version
 
 ```bash
-node notion.js --help
-node notion.js --version
+node dist/notion.js --help
+node dist/notion.js --version
 ```

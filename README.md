@@ -15,11 +15,12 @@ It works by providing a Codex skill definition plus a Node CLI in `scripts/notio
 ```bash
 cd scripts/notion
 npm install
+npm run build
 export NOTION_TOKEN=secret_xxx
 notion list-db --limit 5 --format table
 ```
 
-If `notion` is not available in your PATH, run the CLI as `node notion.js`.
+If `notion` is not available in your PATH, run the compiled CLI as `node dist/notion.js`.
 
 ## Setup
 
@@ -79,5 +80,5 @@ Please pick up apples, oats, and milk on the way home." | notion parse-block
 
 ```bash
 cd scripts/notion
-npm test
+npm run test:unit
 ```

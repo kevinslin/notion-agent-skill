@@ -1,3 +1,4 @@
+// @ts-nocheck
 const { Client } = require('@notionhq/client');
 
 const LOOKUP_OBJECT_FILTER_VALUES = ['page', 'database', 'data_source'];

@@ -9,6 +9,9 @@ This is a CLI for working with notion
 # Run unit tests
 npm run test:unit
 
+# Build the compiled CLI
+npm run build
+
 # Run integration tests (uses .env.test for credentials)
 npm run test:integ
 
@@ -16,10 +19,10 @@ npm run test:integ
 # Required: NOTION_TOKEN, TEST_DATABASE_ID
 
 # Run single test file
-npx jest --config jest.integ.config.js integ/create.test.js
+npx jest --config jest.integ.config.js integ/create.test.ts
 
 # Run specific test
-npx jest --config jest.integ.config.js integ/create.test.js -t "should create a page with title property"
+npx jest --config jest.integ.config.js integ/create.test.ts -t "should create a page with title property"
 
 # Update snapshots
 npx jest --config jest.unit.config.js -u
@@ -31,10 +34,10 @@ npx jest --config jest.unit.config.js -u
 notionv2 create --database-id <id> --properties Name="Test" --bodyFromRawMarkdown "Hello"
 
 # Direct execution
-node notion.js create --database-id <id> --properties Name="Test" --bodyFromRawMarkdown "Hello"
+node dist/notion.js create --database-id <id> --properties Name="Test" --bodyFromRawMarkdown "Hello"
 
 # With dotenv
-node -r dotenv/config notion.js create --database-id <id> --properties Name="Test"
+node -r dotenv/config dist/notion.js create --database-id <id> --properties Name="Test"
 ```
 
 ## Architecture
@@ -42,13 +45,13 @@ node -r dotenv/config notion.js create --database-id <id> --properties Name="Tes
 ### Modular Command Pattern
 The codebase follows a clean separation of concerns:
 
-- **`notion.js`**: CLI entry point and command router using yargs
-- **`commands/`**: Individual command modules (for example: `create.js`, `fetch.js`, `lookup.js`, `list-db.js`)
+- **`notion.ts`**: TypeScript CLI entry point compiled to `dist/notion.js`
+- **`commands/`**: Individual command modules (for example: `create.ts`, `fetch.ts`, `lookup.ts`, `list-db.ts`)
   - Each module exports: `{ command, describe, builder, handler }`
   - Handler contains the command implementation
 - **`utils/`**: Shared utility functions
-  - `helpers.js`: Core utilities (loadEnv, coerceValueForPropertyType, etc.)
-  - `index.js`: Re-exports all utilities
+  - `helpers.ts`: Core utilities (loadEnv, coerceValueForPropertyType, etc.)
+  - `index.ts`: Re-exports all utilities
 - **`integ/`**: Integration tests that interact with real Notion API
 
 ### Key Design Patterns
@@ -60,7 +63,7 @@ The codebase follows a clean separation of concerns:
 ## Critical Implementation Details
 
 ### Property Type Coercion System
-The `coerceValueForPropertyType()` function (`utils/helpers.js:64-111`) converts simple string values into Notion's complex property structures. This is essential for CLI usability.
+The `coerceValueForPropertyType()` function (`utils/helpers.ts`) converts simple string values into Notion's complex property structures. This is essential for CLI usability.
 
 Supported types:
 - `title`, `rich_text`: Text content with rich text arrays
@@ -74,7 +77,7 @@ Supported types:
 **Critical**: Each property type must match the database schema exactly. The create command fetches the database schema first to determine property types.
 
 ### Environment Loading Strategy
-`loadEnv()` (`utils/helpers.js:11-43`) traverses up from the current directory looking for a `kevin-garden` folder and loads `kevin-garden/.env` or `kevin-garden/.env.test` if found; otherwise it falls back to `$HOME/.env` or `$HOME/.env.test`:
+`loadEnv()` (`utils/helpers.ts`) traverses up from the current directory looking for a `kevin-garden` folder and loads `kevin-garden/.env` or `kevin-garden/.env.test` if found; otherwise it falls back to `$HOME/.env` or `$HOME/.env.test`:
 - Checks `NODE_ENV` environment variable
   - If `NODE_ENV=test`, loads `.env.test`
   - Otherwise (including production), loads `.env`
@@ -86,7 +89,7 @@ Supported types:
 **Critical**: This allows the CLI to work from any subdirectory while preferring workspace-scoped env files and falling back to home-scoped credentials.
 
 ### Markdown Conversion
-`markdownToParagraphBlocks()` (`utils/helpers.js:142-158`) converts markdown to Notion paragraph blocks:
+`markdownToParagraphBlocks()` (`utils/helpers.ts`) converts markdown to Notion paragraph blocks:
 - Splits on newlines
 - Creates paragraph blocks with rich text
 - Truncates lines at 2000 characters (Notion API limit)
@@ -99,7 +102,7 @@ Supported types:
 - Pure logic tests that don't make database calls
 - Fast execution, no external dependencies
 - Test parsing, validation, and data transformation logic
-- Example: `tests/filter.test.js` - tests filter string parsing and AST conversion
+- Example: `tests/filter.test.ts` - tests filter string parsing and AST conversion
 
 **Integration Tests** (`integ/`):
 - Interact with real Notion API
@@ -134,30 +137,30 @@ See `llm/plans/2025-12-14-refactor-to-notionv2/plan.md` for the full implementat
 
 ```
 notionv2/
-├── notion.js                  # CLI entry point
+├── notion.ts                  # TypeScript CLI entry point
 ├── commands/
-│   ├── create.js             # Create command implementation
-│   ├── fetch.js              # Fetch pages from a database
-│   ├── list-db.js            # List databases command
-│   ├── lookup.js             # Search pages/databases via Notion Search API
-│   ├── sync.js               # Sync notes to Notion command
-│   └── sync-meta.js          # Sync database metadata command
+│   ├── create.ts             # Create command implementation
+│   ├── fetch.ts              # Fetch pages from a database
+│   ├── list-db.ts            # List databases command
+│   ├── lookup.ts             # Search pages/databases via Notion Search API
+│   ├── sync.ts               # Sync notes to Notion command
+│   └── sync-meta.ts          # Sync database metadata command
 ├── utils/
-│   ├── helpers.js            # Core utility functions
-│   ├── filter.js             # Filter parsing and conversion
-│   └── index.js              # Re-exports
+│   ├── helpers.ts            # Core utility functions
+│   ├── filter.ts             # Filter parsing and conversion
+│   └── index.ts              # Re-exports
 ├── tests/
-│   ├── fetch.test.js         # Fetch helper unit tests
-│   ├── filter.test.js        # Filter parser unit tests
-│   └── lookup.test.js        # Lookup helper unit tests
+│   ├── fetch.test.ts         # Fetch helper unit tests
+│   ├── filter.test.ts        # Filter parser unit tests
+│   └── lookup.test.ts        # Lookup helper unit tests
 ├── integ/
-│   ├── create.test.js        # Integration tests (DB calls)
-│   ├── fetch.test.js         # Fetch integration tests
-│   ├── filter.test.js        # Filter integration tests
-│   ├── list-db.test.js       # List databases tests
-│   ├── lookup.test.js        # Lookup integration tests
-│   ├── sync-meta.test.js     # Sync metadata tests
-│   ├── setupTestDatabase.js  # Test database setup script
+│   ├── create.test.ts        # Integration tests (DB calls)
+│   ├── fetch.test.ts         # Fetch integration tests
+│   ├── filter.test.ts        # Filter integration tests
+│   ├── list-db.test.ts       # List databases tests
+│   ├── lookup.test.ts        # Lookup integration tests
+│   ├── sync-meta.test.ts     # Sync metadata tests
+│   ├── setupTestDatabase.ts  # Test database setup script
 │   └── __snapshots__/        # Jest snapshots
 ├── package.json
 └── llm/plans/                # Implementation planning docs
@@ -199,11 +202,11 @@ The test database (specified by `TEST_DATABASE_ID` in `.env.test`) must have the
 | dendron_id | rich_text | Sync tests | Required for `notion sync` integration tests |
 | last_synced | date | Sync tests | Required for `notion sync` integration tests |
 
-**Setup Helper**: Run `node integ/setupTestDatabase.js` to automatically configure your test database with all required properties.
+**Setup Helper**: Run `node dist/integ/setupTestDatabase.js` to automatically configure your test database with all required properties.
 
 ```bash
 # First-time setup
-node integ/setupTestDatabase.js
+node dist/integ/setupTestDatabase.js
 
 # This will:
 # 1. Verify TEST_DATABASE_ID exists and is accessible
@@ -217,7 +220,7 @@ node integ/setupTestDatabase.js
 2. Share it with your integration (Settings & Members > Connections)
 3. Copy the database ID from the URL (the part after the last slash, before the `?`)
 4. Add `TEST_DATABASE_ID=<database-id>` to `kevin-garden/.env.test`
-5. Run `node integ/setupTestDatabase.js` to configure it
+5. Run `node dist/integ/setupTestDatabase.js` to configure it
 
 **Snapshot testing**: Use `.toMatchSnapshot()` but exclude dynamic fields like IDs and timestamps in production. Current tests snapshot the full response for debugging.
 
@@ -236,8 +239,8 @@ npx jest --config jest.unit.config.js tests/
 npx jest --config jest.integ.config.js integ/
 
 # Single test file
-npx jest --config jest.integ.config.js integ/create.test.js
-npx jest --config jest.unit.config.js tests/filter.test.js
+npx jest --config jest.integ.config.js integ/create.test.ts
+npx jest --config jest.unit.config.js tests/filter.test.ts
 
 # Watch mode
 npx jest --config jest.unit.config.js --watch

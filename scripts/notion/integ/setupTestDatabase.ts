@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// @ts-nocheck
 /**
  * Setup Test Database
  *
@@ -7,7 +8,7 @@
  * It will add any missing properties without modifying existing ones.
  *
  * Usage:
- *   node integ/setupTestDatabase.js
+ *   node dist/integ/setupTestDatabase.js
  *
  * Prerequisites:
  *   - NOTION_TOKEN in .env.test

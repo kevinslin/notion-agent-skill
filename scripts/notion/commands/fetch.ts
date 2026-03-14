@@ -1,3 +1,4 @@
+// @ts-nocheck
 const { Client } = require('@notionhq/client');
 const fs = require('fs');
 const os = require('os');
@@ -104,7 +105,7 @@ async function resolveDatabaseId({ client, databaseId, databaseName, env }) {
 
   throw new Error(
     `No database found with name "${databaseName}". ` +
-      'Run `node notion.js list-db` or `node notion.js sync-meta` to inspect available databases.'
+      'Run `node dist/notion.js list-db` or `node dist/notion.js sync-meta` to inspect available databases.'
   );
 }
 
