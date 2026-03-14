@@ -144,6 +144,9 @@ Sync local markdown notes or CSV files to Notion using YAML rule files in `~/.no
 Options:
 
 - `--from`: Required source format: `md` or `csv`. If omitted in an interactive terminal, the CLI prompts for it.
+- `--operation`: For CSV sources, `sync` creates or updates rows; `update` only updates rows that already exist in Notion.
+- `--columns`: For CSV operations, limit processing to the listed source or target columns.
+- `--limit`: For CSV operations, cap the number of rows processed in a run.
 - `--rule`: Run a specific rule (matches rule filename or `name` field).
 - `--path`: Additional file or directory paths to scan (repeatable).
 - `--dry-run`: Print planned actions without writing changes.
@@ -158,6 +161,8 @@ Notes:
 - CSV rows persist sync metadata in `dendron_id`, `notion_url`, and `last_synced` columns.
 - CSV sync requires `mapping[]` plus `destination.kind` and `destination.id`. Legacy `fmToSync` is not supported for CSV rules.
 - `syncIdColumn` is optional for CSV rules. When provided, that source column becomes the preferred create/update identity and is persisted into `dendron_id`.
+- `--operation update` never creates new Notion pages. Rows without an existing match are skipped.
+- `--columns` filters CSV mappings by `fromName` or `toName`, while still preserving sync metadata updates.
 - If a CSV row does not provide `dendron_id` or `id`, the CLI generates a deterministic `dendron_id` from the rule name plus mapped source values.
 - Multiple CSV mappings with `toType: body` are appended in mapping order, joined by a blank line.
 - `toType: file/image` appends media blocks after the page body is synced.
@@ -174,6 +179,7 @@ node notion.js sync --from md --rule task
 node notion.js sync --from md --rules-dir ./syncRules
 node notion.js sync --from csv ./exports/tasks.csv
 node notion.js sync --from csv --path ../exports
+node notion.js sync --from csv --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv
 ```
 
 CSV rule example:

@@ -33,6 +33,7 @@ const CSV_TO_TYPES = new Set(['string', 'number', 'body', 'file/image']);
 const NOTION_API_VERSION = '2026-03-11';
 const CSV_BODY_SEPARATOR = '\n\n';
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tif', '.tiff']);
+const SYNC_OPERATIONS = new Set(['sync', 'update']);
 const MIME_TYPES_BY_EXTENSION = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -204,6 +205,20 @@ function resolveRulesDir(rulesDir) {
   }
 
   return path.resolve(process.cwd(), rulesDir);
+}
+
+function normalizeColumnsOption(columnsOption) {
+  if (!columnsOption) {
+    return null;
+  }
+
+  const values = Array.isArray(columnsOption) ? columnsOption : [columnsOption];
+  const normalized = values
+    .flatMap((value) => String(value).split(','))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return normalized.length ? new Set(normalized) : null;
 }
 
 function loadSyncRules(rulesDir) {
@@ -574,9 +589,18 @@ function buildPropertyValue({ type, value, mode, existingProperty }) {
   return coerceValueForPropertyType(type, String(value));
 }
 
-function getSyncFieldMappings(rule, sourceData, sourceFormat) {
+function getSyncFieldMappings(rule, sourceData, sourceFormat, selectedColumns = null) {
   if (sourceFormat === 'csv') {
-    return Array.isArray(rule.mapping) ? rule.mapping : [];
+    const mappings = Array.isArray(rule.mapping) ? rule.mapping : [];
+    if (!selectedColumns || !selectedColumns.size) {
+      return mappings;
+    }
+
+    return mappings.filter((mapping) => {
+      const fromName = mapping.fromName ? String(mapping.fromName) : '';
+      const toName = mapping.toName ? String(mapping.toName) : fromName;
+      return selectedColumns.has(fromName) || selectedColumns.has(toName);
+    });
   }
 
   return Array.isArray(rule.fmToSync) ? rule.fmToSync : [];
@@ -1069,10 +1093,12 @@ async function buildCsvSyncPayload({
   env,
   dryRun,
   sourceFilePath,
+  selectedColumns,
 }) {
   const properties = {};
   const bodyFragments = [];
   const fileActions = [];
+  let shouldTouchBody = false;
   const helperContext = { queuedFileResults: [] };
   const helper = createCsvProcessHelper({
     sourceFilePath,
@@ -1086,7 +1112,7 @@ async function buildCsvSyncPayload({
     ].filter(Boolean),
   };
 
-  for (const mapping of getSyncFieldMappings(rule, row, 'csv')) {
+  for (const mapping of getSyncFieldMappings(rule, row, 'csv', selectedColumns)) {
     const rawValue = row[mapping.fromName];
     if (isEmptyValue(rawValue) && !mapping.processFn) {
       continue;
@@ -1107,6 +1133,7 @@ async function buildCsvSyncPayload({
 
     for (const item of processedItems) {
       if (item && typeof item === 'object' && item.__syncKind === 'body') {
+        shouldTouchBody = true;
         if (!isEmptyValue(item.text)) {
           bodyFragments.push(String(item.text));
         }
@@ -1114,11 +1141,13 @@ async function buildCsvSyncPayload({
       }
 
       if (item && typeof item === 'object' && item.__syncKind === 'file') {
+        shouldTouchBody = true;
         fileActions.push(...normalizeDeferredFileAction(item, fileContext));
         continue;
       }
 
       if (mapping.toType === 'body') {
+        shouldTouchBody = true;
         if (!isEmptyValue(item)) {
           bodyFragments.push(String(item));
         }
@@ -1126,6 +1155,7 @@ async function buildCsvSyncPayload({
       }
 
       if (mapping.toType === 'file/image') {
+        shouldTouchBody = true;
         fileActions.push(...normalizeDeferredFileAction(item, fileContext));
         continue;
       }
@@ -1168,6 +1198,7 @@ async function buildCsvSyncPayload({
     properties,
     body: bodyFragments.filter((fragment) => !isEmptyValue(fragment)).join(CSV_BODY_SEPARATOR),
     fileActions,
+    shouldTouchBody,
   };
 }
 
@@ -1360,6 +1391,7 @@ async function syncRecord({
   schema,
   sourceData,
   sourceFormat,
+  operation,
   body,
   fileActions,
   existingPage,
@@ -1371,6 +1403,7 @@ async function syncRecord({
   authToken,
   persist,
   sourceFilePath,
+  selectedColumns,
 }) {
   const syncTimestamp = new Date();
   const lastSyncedFrontmatter = formatLocalDateTime(syncTimestamp);
@@ -1391,6 +1424,7 @@ async function syncRecord({
           env,
           dryRun,
           sourceFilePath,
+          selectedColumns,
         })
       : {
           properties: await buildProperties({
@@ -1412,6 +1446,7 @@ async function syncRecord({
 
   const effectiveBody = sourceFormat === 'csv' ? syncPayload.body : body;
   const effectiveFileActions = sourceFormat === 'csv' ? syncPayload.fileActions : fileActions || [];
+  const shouldTouchBody = sourceFormat === 'csv' ? syncPayload.shouldTouchBody : true;
   const properties = syncPayload.properties;
 
   sourceData.last_synced = lastSyncedFrontmatter;
@@ -1421,6 +1456,12 @@ async function syncRecord({
   }
 
   if (!sourceData.notion_url) {
+    if (operation === 'update') {
+      if (!dryRun && persist) {
+        persist();
+      }
+      return { action: dryRun ? 'would_skip_update' : 'skipped_update', url: null };
+    }
     ensureTitleProperty({ properties, schema });
     if (dryRun) {
       return { action: 'would_create', url: null };
@@ -1458,13 +1499,15 @@ async function syncRecord({
     properties,
   });
 
-  await replacePageBody({ client, pageId, body: effectiveBody });
-  await appendDeferredFileBlocks({
-    client,
-    pageId,
-    fileActions: effectiveFileActions,
-    authToken,
-  });
+  if (shouldTouchBody) {
+    await replacePageBody({ client, pageId, body: effectiveBody });
+    await appendDeferredFileBlocks({
+      client,
+      pageId,
+      fileActions: effectiveFileActions,
+      authToken,
+    });
+  }
 
   if (persist) {
     persist();
@@ -1496,6 +1539,7 @@ async function syncMarkdownFile({
     schema,
     sourceData: frontmatter,
     sourceFormat: 'md',
+    operation: 'sync',
     body: noteBody,
     fileActions: [],
     existingPage,
@@ -1510,6 +1554,7 @@ async function syncMarkdownFile({
       fs.writeFileSync(filePath, output, 'utf8');
     },
     sourceFilePath: filePath,
+    selectedColumns: null,
   });
 }
 
@@ -1517,6 +1562,9 @@ async function syncCsvFile({
   client,
   filePath,
   rules,
+  operation,
+  selectedColumns,
+  limitState,
   dryRun,
   summary,
   schemaCache,
@@ -1541,6 +1589,10 @@ async function syncCsvFile({
   };
 
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    if (limitState && typeof limitState.remaining === 'number' && limitState.remaining <= 0) {
+      break;
+    }
+
     const row = rows[rowIndex];
     const noteFname = getSourceFname(row, filePath) || baseFname;
     try {
@@ -1587,6 +1639,7 @@ async function syncCsvFile({
         schema,
         sourceData: row,
         sourceFormat: 'csv',
+        operation,
         body: null,
         fileActions: [],
         existingPage,
@@ -1598,10 +1651,16 @@ async function syncCsvFile({
         authToken,
         persist: persistCsv,
         sourceFilePath: filePath,
+        selectedColumns,
       });
+      if (limitState && typeof limitState.remaining === 'number') {
+        limitState.remaining -= 1;
+      }
 
       if (result.action === 'created' || result.action === 'would_create') {
         summary.created += 1;
+      } else if (result.action === 'skipped_update' || result.action === 'would_skip_update') {
+        summary.skipped += 1;
       } else {
         summary.updated += 1;
       }
@@ -1631,6 +1690,20 @@ module.exports = {
         type: 'string',
         choices: ['md', 'csv'],
         describe: 'Source format to sync from (required: md or csv)',
+      })
+      .option('operation', {
+        type: 'string',
+        choices: ['sync', 'update'],
+        describe: 'Sync behavior for CSV sources: sync creates/updates, update only updates existing rows',
+        default: 'sync',
+      })
+      .option('columns', {
+        type: 'array',
+        describe: 'For CSV update operations, limit updates to the listed source or target columns',
+      })
+      .option('limit', {
+        type: 'number',
+        describe: 'Maximum number of CSV rows to process',
       })
       .option('rule', {
         type: 'string',
@@ -1672,6 +1745,9 @@ module.exports = {
     try {
       const {
         from: fromArg,
+        operation: operationArg,
+        columns: columnsArg,
+        limit: limitArg,
         rule: ruleFilter,
         path: extraPaths,
         target,
@@ -1679,6 +1755,21 @@ module.exports = {
         rulesDir: rulesDirInput,
       } = argv;
       const sourceFormat = fromArg || (await promptForSourceFormat());
+      const operation = String(operationArg || 'sync').trim().toLowerCase();
+      if (!SYNC_OPERATIONS.has(operation)) {
+        throw new Error(`Unsupported operation "${operationArg}". Expected one of: sync, update.`);
+      }
+      const selectedColumns = normalizeColumnsOption(columnsArg);
+      const limit = limitArg === undefined ? null : Number(limitArg);
+      if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) {
+        throw new Error('--limit must be a positive integer.');
+      }
+      if (sourceFormat !== 'csv' && operation !== 'sync') {
+        throw new Error('--operation is only supported for --from csv.');
+      }
+      if (sourceFormat !== 'csv' && selectedColumns) {
+        throw new Error('--columns is only supported for --from csv.');
+      }
 
       const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
       if (!token) {
@@ -1730,13 +1821,20 @@ module.exports = {
       const databaseIdCache = new Map();
       const relationCache = new Map();
       const env = process.env.NODE_ENV === 'test' ? 'test' : 'production';
+      const limitState = limit === null ? null : { remaining: limit };
 
       if (sourceFormat === 'csv') {
         for (const filePath of sourceFiles) {
+          if (limitState && limitState.remaining <= 0) {
+            break;
+          }
           await syncCsvFile({
             client,
             filePath,
             rules: sourceRules,
+            operation,
+            selectedColumns,
+            limitState,
             dryRun,
             summary,
             schemaCache,

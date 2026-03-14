@@ -82,6 +82,9 @@ Notes:
 - Markdown sync still uses `fmToSync` plus `destination.databaseId`.
 - CSV sync uses `mapping` plus `destination.kind` and `destination.id`.
 - `syncIdColumn` is optional for CSV rules and, when set, becomes the preferred row identity for deciding create vs update.
+- `notion sync --from csv --operation update` only updates existing pages and skips rows that do not already match.
+- `--columns` filters CSV updates by `fromName` or `toName`, so unspecified mapped columns are left untouched in Notion.
+- `--limit` caps the total number of CSV rows processed across the run.
 - `destination.kind: page` is reserved for future support and currently rejected.
 - CSV `toType` supports `string`, `number`, `body`, and `file/image`.
 - If `toName` is omitted for CSV, the CLI uses `fromName`.

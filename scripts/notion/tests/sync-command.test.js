@@ -205,6 +205,21 @@ destination:
     expect(getCsvRowSyncId(rowA, rule)).toBe(getCsvRowSyncId(rowB, rule));
   });
 
+  test('filters csv mappings to selected columns for update operations', () => {
+    const rule = {
+      mapping: [
+        { fromName: 'Name', toName: 'Title' },
+        { fromName: 'Status', toName: 'Status' },
+        { fromName: 'Summary', toType: 'body' },
+      ],
+    };
+
+    expect(getSyncFieldMappings(rule, {}, 'csv', new Set(['Status', 'Title']))).toEqual([
+      { fromName: 'Name', toName: 'Title' },
+      { fromName: 'Status', toName: 'Status' },
+    ]);
+  });
+
   test('builds csv payload with ordered body fragments and default toName', async () => {
     const workspace = createTempRulesWorkspace();
 

@@ -586,6 +586,163 @@ destination:
     }
   });
 
+  test('update operation only updates selected columns and skips creates', async () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const csvName = `task.sync-csv-update-${uniqueSuffix()}`;
+      fs.writeFileSync(
+        path.join(workspace.syncRulesDir, 'csv-update.yaml'),
+        `fnameTrigger: "task.sync-csv-update-*"
+syncIdColumn: external_id
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Status
+    toName: Status
+destination:
+  kind: db
+  id: "${testDatabaseId}"
+`,
+        'utf8'
+      );
+      const existingId = `external-${uniqueSuffix()}`;
+      const missingId = `missing-${uniqueSuffix()}`;
+      const originalName = `CSV Update Name ${uniqueSuffix()}`;
+      const csvPath = writeCsv({
+        root: workspace.root,
+        fname: csvName,
+        rows: [
+          {
+            external_id: existingId,
+            Name: originalName,
+            Status: 'Not started',
+          },
+        ],
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--from', 'csv', '--rule', 'csv-update', csvPath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      writeCsv({
+        root: workspace.root,
+        fname: csvName,
+        rows: [
+          {
+            external_id: existingId,
+            Name: `${originalName} changed`,
+            Status: 'Done',
+          },
+          {
+            external_id: missingId,
+            Name: `New Row ${uniqueSuffix()}`,
+            Status: 'In Progress',
+          },
+        ],
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--from', 'csv', '--rule', 'csv-update', '--operation', 'update', '--columns', 'Status', csvPath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const rows = parseCsv(fs.readFileSync(csvPath, 'utf8')).rows;
+      expect(rows[0].notion_url).toBeTruthy();
+      expect(rows[0].dendron_id).toBe(existingId);
+      expect(rows[1].notion_url).toBeFalsy();
+      expect(rows[1].dendron_id).toBe(missingId);
+
+      const page = await fetchPage(rows[0].notion_url);
+      expect(page.properties.Name.title[0].plain_text).toBe(originalName);
+      expect(page.properties.Status.status.name).toBe('Done');
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('update operation respects csv limit', async () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const csvName = `task.sync-csv-update-limit-${uniqueSuffix()}`;
+      fs.writeFileSync(
+        path.join(workspace.syncRulesDir, 'csv-update-limit.yaml'),
+        `fnameTrigger: "task.sync-csv-update-limit-*"
+syncIdColumn: external_id
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Status
+    toName: Status
+destination:
+  kind: db
+  id: "${testDatabaseId}"
+`,
+        'utf8'
+      );
+      const rows = [
+        {
+          external_id: `external-a-${uniqueSuffix()}`,
+          Name: `Limit A ${uniqueSuffix()}`,
+          Status: 'Not started',
+        },
+        {
+          external_id: `external-b-${uniqueSuffix()}`,
+          Name: `Limit B ${uniqueSuffix()}`,
+          Status: 'Not started',
+        },
+      ];
+      const csvPath = writeCsv({ root: workspace.root, fname: csvName, rows });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--from', 'csv', '--rule', 'csv-update-limit', csvPath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const createdRows = parseCsv(fs.readFileSync(csvPath, 'utf8')).rows;
+      const urlsById = Object.fromEntries(createdRows.map((row) => [row.external_id, row.notion_url]));
+
+      writeCsv({
+        root: workspace.root,
+        fname: csvName,
+        rows: [
+          {
+            external_id: rows[0].external_id,
+            Name: rows[0].Name,
+            Status: 'Done',
+          },
+          {
+            external_id: rows[1].external_id,
+            Name: rows[1].Name,
+            Status: 'In Progress',
+          },
+        ],
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--from', 'csv', '--rule', 'csv-update-limit', '--operation', 'update', '--columns', 'Status', '--limit', '1', csvPath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const updatedRows = parseCsv(fs.readFileSync(csvPath, 'utf8')).rows;
+      const firstPage = await fetchPage(urlsById[rows[0].external_id]);
+      const secondPage = await fetchPage(urlsById[rows[1].external_id]);
+
+      expect(updatedRows[0].notion_url).toBe(urlsById[rows[0].external_id]);
+      expect(updatedRows[1].notion_url).toBeFalsy();
+      expect(firstPage.properties.Status.status.name).toBe('Done');
+      expect(secondPage.properties.Status.status.name).toBe('Not started');
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
   test('requires --from in non-interactive mode', () => {
     const workspace = createTempWorkspace();
 
