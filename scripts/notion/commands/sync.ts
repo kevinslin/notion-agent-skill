@@ -4,7 +4,6 @@ const { Client } = require('@notionhq/client');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const readline = require('readline');
 const yaml = require('js-yaml');
 const {
   coerceValueForPropertyType,
@@ -29,12 +28,12 @@ const NOTION_ONLY_LABEL = 'NOTION_ONLY';
 const DEFAULT_IGNORE_DIRS = new Set(['node_modules', '.git', 'syncRules']);
 const DEFAULT_RULES_DIR = path.join(os.homedir(), '.notion-agents-skill', 'syncRules');
 const CSV_METADATA_COLUMNS = new Set(['id', 'dendron_id', 'fname', 'notion_url', 'last_synced']);
-const SYNC_SOURCE_FORMATS = new Set(['md', 'csv']);
 const CSV_TO_TYPES = new Set(['string', 'number', 'body', 'file/image']);
 const NOTION_API_VERSION = '2026-03-11';
 const CSV_BODY_SEPARATOR = '\n\n';
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tif', '.tiff']);
 const SYNC_OPERATIONS = new Set(['sync', 'update']);
+const SYNC_SOURCE_FORMATS = new Set(['md', 'csv']);
 const MIME_TYPES_BY_EXTENSION = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -324,31 +323,116 @@ function collectSourceFiles(rootPath, sourceFormat) {
   return collectMarkdownFiles(rootPath, DEFAULT_IGNORE_DIRS);
 }
 
-async function promptForSourceFormat() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error('Missing required --from option. Provide --from md or --from csv when running non-interactively.');
+function inferSourceFormatFromPath(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.md') {
+    return 'md';
+  }
+  if (ext === '.csv') {
+    return 'csv';
+  }
+  return null;
+}
+
+function resolveExplicitRoots(pathsToResolve) {
+  const roots = [];
+
+  for (const rawPath of pathsToResolve || []) {
+    const resolved = path.resolve(process.cwd(), rawPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Path does not exist: ${rawPath}`);
+    }
+    roots.push(resolved);
   }
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  return [...new Set(roots)];
+}
 
-  try {
-    // Keep prompting until the user gives one of the supported formats.
-    while (true) {
-      const answer = await new Promise((resolve) => {
-        rl.question('Sync source format (md/csv): ', resolve);
-      });
+function collectTypedSourceFiles(roots, sourceFormats) {
+  const discovered = new Map();
 
-      const normalized = String(answer || '').trim().toLowerCase();
-      if (SYNC_SOURCE_FORMATS.has(normalized)) {
-        return normalized;
+  for (const sourceFormat of [...new Set(sourceFormats || [])].sort()) {
+    if (!SYNC_SOURCE_FORMATS.has(sourceFormat)) {
+      continue;
+    }
+
+    for (const root of roots || []) {
+      for (const filePath of collectSourceFiles(root, sourceFormat)) {
+        discovered.set(`${sourceFormat}:${filePath}`, { sourceFormat, filePath });
       }
     }
-  } finally {
-    rl.close();
   }
+
+  return [...discovered.values()].sort((left, right) => left.filePath.localeCompare(right.filePath));
+}
+
+function discoverSyncSources({ target, extraPaths, rules }) {
+  const relevantSourceFormats = [...new Set((rules || []).map((rule) => rule.sourceFormat))].sort();
+  if (!relevantSourceFormats.length) {
+    return [];
+  }
+
+  if (target) {
+    if (extraPaths && extraPaths.length) {
+      throw new Error('Do not combine a positional target with --path. Provide a single target only.');
+    }
+
+    const resolvedTarget = path.resolve(process.cwd(), target);
+    if (!fs.existsSync(resolvedTarget)) {
+      throw new Error(`Path does not exist: ${target}`);
+    }
+
+    const targetStats = fs.statSync(resolvedTarget);
+    if (targetStats.isFile()) {
+      const sourceFormat = inferSourceFormatFromPath(resolvedTarget);
+      if (!sourceFormat) {
+        throw new Error(`Unsupported sync target "${target}". Expected a .md or .csv file.`);
+      }
+      if (!relevantSourceFormats.includes(sourceFormat)) {
+        throw new Error(`No matching ${sourceFormat} sync rules found for "${target}".`);
+      }
+      return [{ sourceFormat, filePath: resolvedTarget }];
+    }
+
+    return collectTypedSourceFiles([resolvedTarget], relevantSourceFormats);
+  }
+
+  if (extraPaths && extraPaths.length) {
+    const explicitRoots = resolveExplicitRoots(extraPaths);
+    const discovered = new Map();
+
+    for (const sourceFormat of relevantSourceFormats) {
+      const defaultRoots = sourceFormat === 'csv' ? resolveCsvRoots([]) : resolveNoteRoots([]);
+      const roots = [...new Set([...defaultRoots, ...explicitRoots])];
+      for (const sourceItem of collectTypedSourceFiles(roots, [sourceFormat])) {
+        discovered.set(`${sourceItem.sourceFormat}:${sourceItem.filePath}`, sourceItem);
+      }
+    }
+
+    return [...discovered.values()].sort((left, right) => left.filePath.localeCompare(right.filePath));
+  }
+
+  const discoveredByFormat = new Map();
+  for (const sourceFormat of relevantSourceFormats) {
+    const roots = sourceFormat === 'csv' ? resolveCsvRoots([]) : resolveNoteRoots([]);
+    discoveredByFormat.set(sourceFormat, collectTypedSourceFiles(roots, [sourceFormat]));
+  }
+
+  const discoveredFormats = [...discoveredByFormat.entries()]
+    .filter(([, sources]) => sources.length > 0)
+    .map(([sourceFormat]) => sourceFormat);
+
+  if (discoveredFormats.length > 1) {
+    throw new Error(
+      'Ambiguous default sync scope: discovered both markdown and CSV sources. Pass an explicit file, directory, or --path.'
+    );
+  }
+
+  if (!discoveredFormats.length) {
+    return [];
+  }
+
+  return discoveredByFormat.get(discoveredFormats[0]) || [];
 }
 
 async function getDatabaseSchema(client, cache, databaseId) {
@@ -604,7 +688,16 @@ function getSyncFieldMappings(rule, sourceData, sourceFormat, selectedColumns = 
     });
   }
 
-  return Array.isArray(rule.fmToSync) ? rule.fmToSync : [];
+  const mappings = Array.isArray(rule.fmToSync) ? rule.fmToSync : [];
+  if (!selectedColumns || !selectedColumns.size) {
+    return mappings;
+  }
+
+  return mappings.filter((mapping) => {
+    const fromName = mapping && mapping.name ? String(mapping.name) : '';
+    const toName = mapping && mapping.target ? String(mapping.target) : fromName;
+    return selectedColumns.has(fromName) || selectedColumns.has(toName);
+  });
 }
 
 async function resolveMappedPropertyValue({
@@ -717,10 +810,11 @@ async function buildProperties({
   relationCache,
   env,
   dryRun,
+  selectedColumns,
 }) {
   const properties = {};
 
-  for (const option of getSyncFieldMappings(rule, sourceData, 'md')) {
+  for (const option of getSyncFieldMappings(rule, sourceData, 'md', selectedColumns)) {
     if (!option || !option.name) {
       continue;
     }
@@ -1440,6 +1534,7 @@ async function syncRecord({
             relationCache,
             env,
             dryRun,
+            selectedColumns,
           }),
           body,
           fileActions: fileActions || [],
@@ -1522,6 +1617,8 @@ async function syncMarkdownFile({
   filePath,
   rule,
   schema,
+  operation,
+  selectedColumns,
   existingPage,
   dryRun,
   schemaCache,
@@ -1540,7 +1637,7 @@ async function syncMarkdownFile({
     schema,
     sourceData: frontmatter,
     sourceFormat: 'md',
-    operation: 'sync',
+    operation,
     body: noteBody,
     fileActions: [],
     existingPage,
@@ -1555,8 +1652,28 @@ async function syncMarkdownFile({
       fs.writeFileSync(filePath, output, 'utf8');
     },
     sourceFilePath: filePath,
-    selectedColumns: null,
+    selectedColumns,
   });
+}
+
+function consumeLimit(limitState) {
+  if (limitState && typeof limitState.remaining === 'number') {
+    limitState.remaining -= 1;
+  }
+}
+
+function applyResultToSummary(summary, result) {
+  if (result.action === 'created' || result.action === 'would_create') {
+    summary.created += 1;
+    return;
+  }
+
+  if (result.action === 'skipped_update' || result.action === 'would_skip_update') {
+    summary.skipped += 1;
+    return;
+  }
+
+  summary.updated += 1;
 }
 
 async function syncCsvFile({
@@ -1601,6 +1718,7 @@ async function syncCsvFile({
 
       if (!matchingRules.length) {
         summary.skipped += 1;
+        consumeLimit(limitState);
         continue;
       }
 
@@ -1654,17 +1772,8 @@ async function syncCsvFile({
         sourceFilePath: filePath,
         selectedColumns,
       });
-      if (limitState && typeof limitState.remaining === 'number') {
-        limitState.remaining -= 1;
-      }
-
-      if (result.action === 'created' || result.action === 'would_create') {
-        summary.created += 1;
-      } else if (result.action === 'skipped_update' || result.action === 'would_skip_update') {
-        summary.skipped += 1;
-      } else {
-        summary.updated += 1;
-      }
+      consumeLimit(limitState);
+      applyResultToSummary(summary, result);
 
       const prefix = dryRun ? 'DRY RUN:' : '✓';
       const url = result.url || '(new)';
@@ -1689,22 +1798,21 @@ module.exports = {
       })
       .option('from', {
         type: 'string',
-        choices: ['md', 'csv'],
-        describe: 'Source format to sync from (required: md or csv)',
+        hidden: true,
       })
       .option('operation', {
         type: 'string',
         choices: ['sync', 'update'],
-        describe: 'Sync behavior for CSV sources: sync creates/updates, update only updates existing rows',
+        describe: 'Sync behavior for matched records: sync creates/updates, update only updates existing records',
         default: 'sync',
       })
       .option('columns', {
         type: 'array',
-        describe: 'For CSV update operations, limit updates to the listed source or target columns',
+        describe: 'Limit sync to the listed source or target fields while still persisting sync metadata',
       })
       .option('limit', {
         type: 'number',
-        describe: 'Maximum number of CSV rows to process',
+        describe: 'Maximum number of records to process across markdown notes and CSV rows',
       })
       .option('rule', {
         type: 'string',
@@ -1725,12 +1833,12 @@ module.exports = {
         describe: 'Directory containing sync rule YAML files',
       })
       .example('$0 sync')
-      .example('$0 sync --from md')
-      .example('$0 sync --from csv ./exports/tasks.csv')
       .example('$0 sync ./notes/task.2025.12.28.finalize-trip.md')
+      .example('$0 sync ./exports/tasks.csv')
       .example('$0 sync --rule task')
       .example('$0 sync --rules-dir ./syncRules')
-      .example('$0 sync --path ../notes-archive');
+      .example('$0 sync --path ./notes --path ./exports')
+      .example('$0 sync --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv');
   },
 
   handler: async (argv) => {
@@ -1755,7 +1863,9 @@ module.exports = {
         dryRun,
         rulesDir: rulesDirInput,
       } = argv;
-      const sourceFormat = fromArg || (await promptForSourceFormat());
+      if (fromArg !== undefined) {
+        throw new Error('--from has been removed. notion sync now infers markdown vs CSV sources from the files you target.');
+      }
       const operation = String(operationArg || 'sync').trim().toLowerCase();
       if (!SYNC_OPERATIONS.has(operation)) {
         throw new Error(`Unsupported operation "${operationArg}". Expected one of: sync, update.`);
@@ -1764,12 +1874,6 @@ module.exports = {
       const limit = limitArg === undefined ? null : Number(limitArg);
       if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) {
         throw new Error('--limit must be a positive integer.');
-      }
-      if (sourceFormat !== 'csv' && operation !== 'sync') {
-        throw new Error('--operation is only supported for --from csv.');
-      }
-      if (sourceFormat !== 'csv' && selectedColumns) {
-        throw new Error('--columns is only supported for --from csv.');
       }
 
       const token = process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
@@ -1783,37 +1887,21 @@ module.exports = {
       const rules = ruleFilter
         ? allRules.filter((r) => r.ruleName === ruleFilter || r.name === ruleFilter)
         : allRules;
-      const sourceRules = rules.filter((rule) => rule.sourceFormat === sourceFormat);
 
-      if (!sourceRules.length) {
+      if (!rules.length) {
         throw new Error(`No matching sync rules found${ruleFilter ? ` for "${ruleFilter}"` : ''}.`);
       }
 
-      let roots = [];
-      if (target) {
-        if (extraPaths && extraPaths.length) {
-          throw new Error('Do not combine a positional target with --path. Provide a single target only.');
-        }
-        const resolvedTarget = path.resolve(process.cwd(), target);
-        if (!fs.existsSync(resolvedTarget)) {
-          throw new Error(`Path does not exist: ${target}`);
-        }
-        roots = [resolvedTarget];
-      } else {
-        roots = sourceFormat === 'csv' ? resolveCsvRoots(extraPaths) : resolveNoteRoots(extraPaths);
-      }
-      const sourceFiles = new Set();
+      const sourceItems = discoverSyncSources({
+        target,
+        extraPaths,
+        rules,
+      });
 
-      for (const root of roots) {
-        for (const filePath of collectSourceFiles(root, sourceFormat)) {
-          sourceFiles.add(filePath);
-        }
-      }
-
-      summary.total = sourceFiles.size;
+      summary.total = sourceItems.length;
 
       if (!summary.total) {
-        console.log(`No ${sourceFormat} sources found to sync.`);
+        console.log('No sources found to sync.');
         process.exit(0);
       }
 
@@ -1824,15 +1912,17 @@ module.exports = {
       const env = process.env.NODE_ENV === 'test' ? 'test' : 'production';
       const limitState = limit === null ? null : { remaining: limit };
 
-      if (sourceFormat === 'csv') {
-        for (const filePath of sourceFiles) {
-          if (limitState && limitState.remaining <= 0) {
-            break;
-          }
+      for (const sourceItem of sourceItems) {
+        if (limitState && limitState.remaining <= 0) {
+          break;
+        }
+
+        const { sourceFormat, filePath } = sourceItem;
+        if (sourceFormat === 'csv') {
           await syncCsvFile({
             client,
             filePath,
-            rules: sourceRules,
+            rules: rules.filter((rule) => rule.sourceFormat === 'csv'),
             operation,
             selectedColumns,
             limitState,
@@ -1844,67 +1934,69 @@ module.exports = {
             env,
             authToken: token,
           });
+          continue;
         }
-      } else {
-        for (const filePath of sourceFiles) {
-          let noteFname = null;
-          try {
-            const parsed = parseNoteFile(filePath);
-            const frontmatter = parsed.data || {};
-            noteFname = getSourceFname(frontmatter, filePath);
-            const matchingRules = findMatchingRules(sourceRules, noteFname);
 
-            if (!matchingRules.length) {
-              summary.skipped += 1;
-              continue;
-            }
+        let noteFname = null;
+        try {
+          const parsed = parseNoteFile(filePath);
+          const frontmatter = parsed.data || {};
+          noteFname = getSourceFname(frontmatter, filePath);
+          const matchingRules = findMatchingRules(
+            rules.filter((rule) => rule.sourceFormat === 'md'),
+            noteFname
+          );
 
-            if (matchingRules.length > 1) {
-              throw new Error(`Note matches multiple rules: ${matchingRules.map((r) => r.ruleName).join(', ')}`);
-            }
-
-            summary.matched += 1;
-            const rule = matchingRules[0];
-            const schema = await getDatabaseSchema(client, schemaCache, rule.destination.databaseId);
-
-            let existingPage = null;
-            if (frontmatter.notion_url) {
-              const rawId = extractNotionIdFromUrl(frontmatter.notion_url);
-              if (!rawId) {
-                throw new Error('Unable to extract page ID from notion_url.');
-              }
-              const pageId = normalizeNotionId(rawId);
-              existingPage = await client.pages.retrieve({ page_id: pageId });
-            }
-
-            const result = await syncMarkdownFile({
-              client,
-              filePath,
-              rule,
-              schema,
-              existingPage,
-              dryRun,
-              schemaCache,
-              databaseIdCache,
-              relationCache,
-              env,
-              authToken: token,
-            });
-
-            if (result.action === 'created' || result.action === 'would_create') {
-              summary.created += 1;
-            } else {
-              summary.updated += 1;
-            }
-
-            const prefix = dryRun ? 'DRY RUN:' : '✓';
-            const url = result.url || '(new)';
-            console.log(`${prefix} ${result.action} ${noteFname} -> ${url}`);
-          } catch (err) {
-            const message = err && err.body ? JSON.stringify(err.body, null, 2) : err.message || String(err);
-            summary.errors.push({ filePath, message });
-            console.error(`! Failed ${noteFname || filePath}: ${message}`);
+          if (!matchingRules.length) {
+            summary.skipped += 1;
+            consumeLimit(limitState);
+            continue;
           }
+
+          if (matchingRules.length > 1) {
+            throw new Error(`Note matches multiple rules: ${matchingRules.map((r) => r.ruleName).join(', ')}`);
+          }
+
+          summary.matched += 1;
+          const rule = matchingRules[0];
+          const schema = await getDatabaseSchema(client, schemaCache, rule.destination.databaseId);
+
+          let existingPage = null;
+          if (frontmatter.notion_url) {
+            const rawId = extractNotionIdFromUrl(frontmatter.notion_url);
+            if (!rawId) {
+              throw new Error('Unable to extract page ID from notion_url.');
+            }
+            const pageId = normalizeNotionId(rawId);
+            existingPage = await client.pages.retrieve({ page_id: pageId });
+          }
+
+          const result = await syncMarkdownFile({
+            client,
+            filePath,
+            rule,
+            schema,
+            operation,
+            selectedColumns,
+            existingPage,
+            dryRun,
+            schemaCache,
+            databaseIdCache,
+            relationCache,
+            env,
+            authToken: token,
+          });
+
+          consumeLimit(limitState);
+          applyResultToSummary(summary, result);
+
+          const prefix = dryRun ? 'DRY RUN:' : '✓';
+          const url = result.url || '(new)';
+          console.log(`${prefix} ${result.action} ${noteFname} -> ${url}`);
+        } catch (err) {
+          const message = err && err.body ? JSON.stringify(err.body, null, 2) : err.message || String(err);
+          summary.errors.push({ filePath, message });
+          console.error(`! Failed ${noteFname || filePath}: ${message}`);
         }
       }
 
@@ -1941,7 +2033,8 @@ module.exports = {
   resolveRelationIds,
   buildRelationPropertyValue,
   findPageByTitle,
-  promptForSourceFormat,
+  inferSourceFormatFromPath,
+  discoverSyncSources,
   syncRecord,
   syncMarkdownFile,
   syncCsvFile,

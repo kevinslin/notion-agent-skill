@@ -4,7 +4,7 @@ Last updated: 2026-03-14
 
 ## Purpose / Question Answered
 
-This flow doc explains how `notion sync` executes from CLI registration through rule loading, source discovery, markdown and CSV branching, and the final Notion create/update write path.
+This flow doc explains how `notion sync` executes from CLI registration through rule loading, typed source discovery, per-record markdown/CSV handling, and the final Notion create/update write path.
 It answers which invocation forms are supported, how the command decides what to sync, and where local state such as `notion_url`, `dendron_id`, and `last_synced` is read or written.
 
 ## Entry points
@@ -21,7 +21,7 @@ It answers which invocation forms are supported, how the command decides what to
 
 Trigger / entry condition:
 - A user invokes `node dist/notion.js sync ...` or the installed `notion sync ...` binary.
-- Supported invocation shapes include `sync --from md`, `sync --from csv ./file.csv`, `sync ./notes/file.md`, `sync --rule task`, `sync --rules-dir ./syncRules`, and `sync --path <dir>`.
+- Supported invocation shapes include `sync`, `sync ./notes/file.md`, `sync ./exports/tasks.csv`, `sync --rule task`, `sync --rules-dir ./syncRules`, and `sync --path <dir>`.
 
 Entrypoints:
 - `scripts/notion/notion.ts: yargs(...).command(syncCommand).parse()`
@@ -31,24 +31,19 @@ Ordered call path:
 - `notion.ts` loads env via `loadEnv()` and falls back to `dotenv.config()` if that lookup throws.
 - yargs registers `sync [target]` and dispatches to `sync.ts` when the command name is `sync`.
 - `handler` reads `from`, `operation`, `columns`, `limit`, `rule`, `path`, `target`, `dry-run`, and `rules-dir` from argv.
-- `handler` chooses `sourceFormat := fromArg || promptForSourceFormat()`.
-- `handler` validates supported operation combinations:
-  - `--operation` and `--columns` are CSV-only.
-  - `--limit` must be a positive integer when present.
+- `handler` rejects the removed `--from` flag and validates `--operation`, `--columns`, and `--limit` as shared sync options.
 - `handler` requires `NOTION_TOKEN || NOTION_API_KEY` before any Notion client is created.
 
 State transitions / outputs:
 - Input: raw CLI argv and process env
-- Output: normalized command options, chosen `sourceFormat`, validated operation mode, authenticated readiness
+- Output: normalized command options, validated operation mode, authenticated readiness
 
 Branch points:
-- If `--from` is omitted in a TTY session, `promptForSourceFormat()` loops until it receives `md` or `csv`.
-- If `--from` is omitted in a non-interactive run, the command throws `Missing required --from option`.
+- If `--from` is passed, the command fails with a removed-flag error.
 - If the auth token is absent, the command aborts before reading rules or sources.
 
 External boundaries:
 - Local env files through `loadEnv()` in bootstrap
-- Terminal stdin/stdout for interactive `md/csv` prompt
 
 #### Sudocode (Phase 1: CLI dispatch and invocation normalization)
 
@@ -63,14 +58,11 @@ yargs(hideBin(process.argv))
 
 // Source: scripts/notion/commands/sync.ts
 handler(argv)
-  sourceFormat := fromArg || promptForSourceFormat() {
-    if !process.stdin.isTTY || !process.stdout.isTTY
-      throw Error("Missing required --from option...")
-    loop until answer in SYNC_SOURCE_FORMATS
-  }
+  if fromArg is provided
+    throw Error("--from has been removed...")
 
   operation := String(operationArg || "sync").trim().toLowerCase()
-  validate operation, columnsArg, limitArg against sourceFormat
+  validate operation, columnsArg, limitArg
 
   token := process.env.NOTION_TOKEN || process.env.NOTION_API_KEY
   if !token
@@ -80,7 +72,7 @@ handler(argv)
 ### Phase 2: Rule loading, filtering, and source discovery
 
 Trigger / entry condition:
-- Phase 1 completed with a valid `sourceFormat` and token.
+- Phase 1 completed with valid options and token.
 
 Entrypoints:
 - `scripts/notion/commands/sync.ts: resolveRulesDir`
@@ -96,23 +88,24 @@ Ordered call path:
 - `loadSyncRules()` verifies the directory exists, loads every `.yaml` / `.yml` file, and normalizes each rule as markdown or CSV.
 - Each rule must supply `fnameTrigger`; CSV rules additionally require `mapping[]` and `destination.kind` / `destination.id`, while markdown rules require `destination.databaseId`.
 - `handler` applies `--rule` as a filter over the loaded rules by `ruleName` or `name`.
-- `handler` then keeps only rules whose `sourceFormat` matches the chosen `md` or `csv` mode.
-- Source roots are resolved from:
-  - positional `target` when present
-  - otherwise `notes/` or `cwd` for markdown
-  - otherwise `cwd` for CSV
-  - plus any `--path` entries
+- `discoverSyncSources()` derives the relevant source kinds from the remaining rules.
+- Source scope is then resolved from:
+  - positional file `target`, whose extension must be `.md` or `.csv`
+  - positional directory `target`, which may contain both kinds
+  - explicit `--path` roots, which may contain both kinds
+  - otherwise the default markdown and CSV roots, with an ambiguity error if both kinds are discoverable
 - `collectSourceFiles()` recursively discovers `.md` or `.csv` files under those roots while ignoring `node_modules`, `.git`, and `syncRules`.
 
 State transitions / outputs:
 - Input: rules directory, optional `--rule`, optional `target`, optional `--path`
-- Output: `sourceRules[]`, `roots[]`, and `sourceFiles`
+- Output: filtered `rules[]` plus `sourceItems[] = { sourceFormat, filePath }`
 
 Branch points:
 - If no YAML files exist in the rules directory, the command errors.
-- If `--rule` is provided and leaves no rules for the chosen `sourceFormat`, the command errors.
+- If `--rule` is provided and leaves no rules, the command errors.
 - If `target` is combined with `--path`, the command errors because the command requires exactly one targeting mode.
-- If no matching source files are found, the command prints `No <format> sources found to sync.` and exits `0`.
+- If the default run discovers both markdown and CSV files, the command errors and asks for an explicit scope.
+- If no matching source files are found, the command prints `No sources found to sync.` and exits `0`.
 
 External boundaries:
 - Local filesystem reads for YAML rules and source-file discovery
@@ -128,25 +121,13 @@ rules := ruleFilter
   ? allRules.filter(r => r.ruleName === ruleFilter || r.name === ruleFilter)
   : allRules
 
-sourceRules := rules.filter(rule => rule.sourceFormat === sourceFormat)
-if !sourceRules.length
+if !rules.length
   throw Error(`No matching sync rules found...`)
 
-if target
-  if extraPaths.length
-    throw Error("Do not combine a positional target with --path...")
-  roots := [path.resolve(process.cwd(), target)]
-else
-  roots := sourceFormat === "csv"
-    ? resolveCsvRoots(extraPaths)
-    : resolveNoteRoots(extraPaths)
+sourceItems := discoverSyncSources({ target, extraPaths, rules })
 
-for root in roots
-  for filePath in collectSourceFiles(root, sourceFormat)
-    sourceFiles.add(filePath)
-
-if sourceFiles.size === 0
-  console.log(`No ${sourceFormat} sources found to sync.`)
+if sourceItems.length === 0
+  console.log("No sources found to sync.")
   process.exit(0)
 ```
 
@@ -436,12 +417,12 @@ syncRecord(...)
 
 ### Core state values (source of truth and usage)
 
-- `sourceFormat`
-  - Source: CLI argv `--from` or interactive `promptForSourceFormat()`
-  - Consumed by: rule filtering, root discovery, markdown vs CSV branch selection
-  - Risk area: omitted `--from` fails in non-interactive contexts
+- `sourceItems`
+  - Source: `discoverSyncSources()` after rule filtering, target/path resolution, and extension inference
+  - Consumed by: the unified file-processing loop that dispatches markdown files vs CSV files
+  - Risk area: default runs error when both markdown and CSV are discoverable without explicit scope
 
-- `sourceRules`
+- `rules`
   - Source: YAML files under the resolved rules directory
   - Consumed by: markdown note matching and CSV row matching
   - Risk area: mis-specified `fnameTrigger` causes silent skips or ambiguity errors
@@ -486,18 +467,18 @@ None identified
 | `--path` | repeated path option | `scripts/notion/commands/sync.ts` | Adds extra roots to scan for markdown/CSV sources |
 | `--rule` | string option | `scripts/notion/commands/sync.ts` | Narrows loaded rules to one named rule before source matching |
 | `--rules-dir` | path option | `scripts/notion/commands/sync.ts` | Overrides the default home-scoped sync rules directory |
-| `--operation` | enum option | `scripts/notion/commands/sync.ts` | For CSV, switches between create-or-update and update-only behavior |
-| `--columns` | repeated string option | `scripts/notion/commands/sync.ts` | For CSV, limits which mappings participate in payload construction |
-| `--limit` | number option | `scripts/notion/commands/sync.ts` | For CSV, caps processed rows |
+| `--operation` | enum option | `scripts/notion/commands/sync.ts` | Switches between create-or-update and update-only behavior for both markdown and CSV records |
+| `--columns` | repeated string option | `scripts/notion/commands/sync.ts` | Limits which markdown `fmToSync` entries or CSV mappings participate in payload construction |
+| `--limit` | number option | `scripts/notion/commands/sync.ts` | Caps processed records across markdown files and CSV rows together |
 | `--dry-run` | boolean option | `scripts/notion/commands/sync.ts` | Simulates actions without remote writes |
 | `row.fname` / frontmatter `fname` | source data field | `scripts/notion/commands/sync.ts` | Overrides filename-stem-based rule auto-discovery |
 
 ### Important gates / branch controls
 
-- `sourceFormat === "csv"`: switches the command into CSV file discovery, row iteration, and CSV payload building.
+- `sourceItem.sourceFormat === "csv"`: switches the current file into CSV row iteration and CSV payload building.
 - `target` vs `--path`: the command forbids mixing a positional target with `--path`.
 - `matchingRules.length`: zero matches skip; more than one match errors; exactly one match proceeds.
-- `operation === "update"`: CSV-only guard that prevents creation of new Notion pages.
+- `operation === "update"`: prevents creation of new markdown pages and new CSV pages.
 - `dryRun`: suppresses remote writes and returns `would_*` actions.
 - `shouldTouchBody`: controls whether CSV updates replace the remote page body.
 - `isNotionOnlyToggle(block)`: preserves toggle blocks labeled `NOTION_ONLY` when replacing page content.

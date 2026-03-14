@@ -109,7 +109,7 @@ flowchart LR
 
 Sync-specific flow:
 
-1. `sync` determines the source format (`--from` or interactive prompt), resolves the rules directory, and loads matching markdown or CSV rules.
+1. `sync` resolves the rules directory, loads matching markdown and/or CSV rules, and infers the source type for each discovered file from the explicit target or file extension.
 2. The command discovers source files from a positional target, `--path`, `notes/`, or the current working directory.
 3. For each source record, it derives a rule match, database schema, existing Notion page (from `notion_url` or `dendron_id`), and the next property/body payload.
 4. It creates or updates the Notion page, optionally replaces the page body, appends uploaded/external files, and persists `notion_url`/`last_synced` back to the source file.

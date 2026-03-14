@@ -113,9 +113,6 @@ destination:
 
   const runSyncCommand = ({ cwd, args = [], rulesDir }) => {
     const cliArgs = ['sync'];
-    if (!args.includes('--from')) {
-      cliArgs.push('--from', 'md');
-    }
     if (rulesDir) {
       cliArgs.push('--rules-dir', rulesDir);
     }
@@ -284,7 +281,7 @@ destination:
 
       const stdout = runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv', csvPath],
+        args: ['--rule', 'csv', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
       expect(stdout).toMatch(/Sync complete/);
@@ -342,7 +339,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-body', csvPath],
+        args: ['--rule', 'csv-body', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -386,7 +383,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-reorder', csvPath],
+        args: ['--rule', 'csv-reorder', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -401,7 +398,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-reorder', csvPath],
+        args: ['--rule', 'csv-reorder', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -454,7 +451,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-file', csvPath],
+        args: ['--rule', 'csv-file', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -498,7 +495,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-fallback', csvPath],
+        args: ['--rule', 'csv-fallback', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -520,7 +517,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-fallback', csvPath],
+        args: ['--rule', 'csv-fallback', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -566,7 +563,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-sync-id', csvPath],
+        args: ['--rule', 'csv-sync-id', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -588,7 +585,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-sync-id', csvPath],
+        args: ['--rule', 'csv-sync-id', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -637,7 +634,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-update', csvPath],
+        args: ['--rule', 'csv-update', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -660,7 +657,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-update', '--operation', 'update', '--columns', 'Status', csvPath],
+        args: ['--rule', 'csv-update', '--operation', 'update', '--columns', 'Status', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -714,7 +711,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-update-limit', csvPath],
+        args: ['--rule', 'csv-update-limit', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -740,7 +737,7 @@ destination:
 
       runSyncCommand({
         cwd: workspace.root,
-        args: ['--from', 'csv', '--rule', 'csv-update-limit', '--operation', 'update', '--columns', 'Status', '--limit', '1', csvPath],
+        args: ['--rule', 'csv-update-limit', '--operation', 'update', '--columns', 'Status', '--limit', '1', csvPath],
         rulesDir: workspace.syncRulesDir,
       });
 
@@ -757,10 +754,84 @@ destination:
     }
   });
 
-  test('requires --from in non-interactive mode', () => {
+  test('syncs explicit mixed directories in one run', async () => {
     const workspace = createTempWorkspace();
 
     try {
+      const notePath = writeNote({
+        notesDir: workspace.notesDir,
+        fname: `task.sync-mixed-note-${uniqueSuffix()}`,
+        title: `Mixed Note ${uniqueSuffix()}`,
+        proj: 'test',
+        body: 'Mixed sync body.',
+      });
+      fs.writeFileSync(
+        path.join(workspace.syncRulesDir, 'csv-mixed.yaml'),
+        `fnameTrigger: "task.sync-mixed-csv-*"
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Status
+    toName: Status
+destination:
+  kind: db
+  id: "${testDatabaseId}"
+`,
+        'utf8'
+      );
+      const csvPath = writeCsv({
+        root: workspace.root,
+        fname: `task.sync-mixed-csv-${uniqueSuffix()}`,
+        rows: [{ Name: `Mixed CSV ${uniqueSuffix()}`, Status: 'Not started' }],
+      });
+
+      const stdout = runSyncCommand({
+        cwd: workspace.root,
+        args: ['.'],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      expect(stdout).toMatch(/Sync complete/);
+
+      const parsedNote = readFrontmatter(notePath);
+      expectSyncedFrontmatter(parsedNote);
+
+      const parsedCsv = parseCsv(fs.readFileSync(csvPath, 'utf8'));
+      expect(parsedCsv.rows[0].notion_url).toBeTruthy();
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('default run errors when markdown and csv sources are both discoverable', () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      writeNote({
+        notesDir: workspace.notesDir,
+        fname: `task.sync-ambiguous-note-${uniqueSuffix()}`,
+        title: `Ambiguous Note ${uniqueSuffix()}`,
+        proj: 'test',
+        body: 'Ambiguous sync body.',
+      });
+      fs.writeFileSync(
+        path.join(workspace.syncRulesDir, 'csv-ambiguous.yaml'),
+        `fnameTrigger: "task.sync-ambiguous-csv-*"
+mapping:
+  - fromName: Name
+    toName: Name
+destination:
+  kind: db
+  id: "${testDatabaseId}"
+`,
+        'utf8'
+      );
+      writeCsv({
+        root: workspace.root,
+        fname: `task.sync-ambiguous-csv-${uniqueSuffix()}`,
+        rows: [{ Name: `Ambiguous CSV ${uniqueSuffix()}` }],
+      });
+
       const result = spawnSync('node', [notionCliPath, 'sync', '--rules-dir', workspace.syncRulesDir], {
         cwd: workspace.root,
         env: { ...process.env },
@@ -768,7 +839,150 @@ destination:
       });
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/Missing required --from option/);
+      expect(result.stderr).toMatch(/Ambiguous default sync scope/);
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('shared limit stops across markdown and csv records', async () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const notePath = writeNote({
+        notesDir: workspace.notesDir,
+        fname: `task.sync-limit-note-${uniqueSuffix()}`,
+        title: `Limit Note ${uniqueSuffix()}`,
+        proj: 'test',
+        body: 'Limit sync body.',
+      });
+      fs.writeFileSync(
+        path.join(workspace.syncRulesDir, 'csv-limit.yaml'),
+        `fnameTrigger: "task.sync-limit-csv-*"
+mapping:
+  - fromName: Name
+    toName: Name
+  - fromName: Status
+    toName: Status
+destination:
+  kind: db
+  id: "${testDatabaseId}"
+`,
+        'utf8'
+      );
+      const csvPath = writeCsv({
+        root: workspace.root,
+        fname: `task.sync-limit-csv-${uniqueSuffix()}`,
+        rows: [{ Name: `Limit CSV ${uniqueSuffix()}`, Status: 'Not started' }],
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['.', '--limit', '1'],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const parsedNote = readFrontmatter(notePath);
+      expect(parsedNote.data.notion_url).toBeTruthy();
+
+      const parsedCsv = parseCsv(fs.readFileSync(csvPath, 'utf8'));
+      expect(parsedCsv.rows[0].notion_url).toBeFalsy();
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('update operation skips unsynced markdown notes', () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const notePath = writeNote({
+        notesDir: workspace.notesDir,
+        fname: `task.sync-update-note-${uniqueSuffix()}`,
+        title: `Update Only Note ${uniqueSuffix()}`,
+        proj: 'test',
+        body: 'Update only sync body.',
+      });
+
+      const stdout = runSyncCommand({
+        cwd: workspace.root,
+        args: ['--operation', 'update', notePath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      expect(stdout).toMatch(/skipped_update/);
+
+      const parsed = readFrontmatter(notePath);
+      expect(parsed.data.notion_url).toBeFalsy();
+      expect(parsed.data.last_synced).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('markdown --columns only updates selected frontmatter mappings', async () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const fname = `task.sync-md-columns-${uniqueSuffix()}`;
+      const notePath = writeNote({
+        notesDir: workspace.notesDir,
+        fname,
+        title: `Markdown Columns ${uniqueSuffix()}`,
+        proj: 'test',
+        body: 'Markdown columns sync body.',
+      });
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: [notePath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const firstParse = readFrontmatter(notePath);
+      const originalProj = firstParse.data.proj;
+      const updatedTitle = `${firstParse.data.title} updated`;
+      fs.writeFileSync(
+        notePath,
+        serializeFrontmatter(
+          {
+            ...firstParse.data,
+            title: updatedTitle,
+            proj: 'should-not-sync',
+          },
+          firstParse.body
+        ),
+        'utf8'
+      );
+
+      runSyncCommand({
+        cwd: workspace.root,
+        args: ['--operation', 'update', '--columns', 'title', notePath],
+        rulesDir: workspace.syncRulesDir,
+      });
+
+      const parsed = readFrontmatter(notePath);
+      const page = await fetchPage(parsed.data.notion_url);
+      expect(page.properties.Name.title[0].plain_text).toBe(updatedTitle);
+      expect(page.properties.Tags.multi_select.map((item) => item.name)).toContain(originalProj);
+      expect(page.properties.Tags.multi_select.map((item) => item.name)).not.toContain('should-not-sync');
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('rejects removed --from flag', () => {
+    const workspace = createTempWorkspace();
+
+    try {
+      const result = spawnSync('node', [notionCliPath, 'sync', '--from', 'md', '--rules-dir', workspace.syncRulesDir], {
+        cwd: workspace.root,
+        env: { ...process.env },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/--from has been removed/);
     } finally {
       workspace.cleanup();
     }

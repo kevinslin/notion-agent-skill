@@ -144,10 +144,9 @@ Sync local markdown notes or CSV files to Notion using YAML rule files in `~/.no
 
 Options:
 
-- `--from`: Required source format: `md` or `csv`. If omitted in an interactive terminal, the CLI prompts for it.
-- `--operation`: For CSV sources, `sync` creates or updates rows; `update` only updates rows that already exist in Notion.
-- `--columns`: For CSV operations, limit processing to the listed source or target columns.
-- `--limit`: For CSV operations, cap the number of rows processed in a run.
+- `--operation`: `sync` creates or updates matched records; `update` only updates existing markdown notes or CSV rows.
+- `--columns`: Limit processing to the listed source or target fields while still persisting sync metadata.
+- `--limit`: Cap the number of records processed in a run, where one markdown file or one CSV row each count as one record.
 - `--rule`: Run a specific rule (matches rule filename or `name` field).
 - `--path`: Additional file or directory paths to scan (repeatable).
 - `--dry-run`: Print planned actions without writing changes.
@@ -156,14 +155,16 @@ Options:
 
 Notes:
 
-- With `--from md`, notes are discovered under `notes/` by default if it exists, otherwise the current working directory.
-- With `--from csv`, files are discovered under the current working directory unless you provide a positional target or `--path`.
+- `notion sync` infers source type from the files you target. The old `--from` flag has been removed.
+- With no positional target and no `--path`, markdown discovery uses `notes/` when present and otherwise `cwd`; CSV discovery uses `cwd`.
+- If both markdown and CSV sources are discoverable in the default run, the command errors and asks for an explicit file, directory, or `--path`.
+- Explicit directories and repeated `--path` values may intentionally contain both markdown and CSV sources, and the command will process both in one run.
 - A markdown note is considered synced if it has a `notion_url` field in frontmatter.
 - CSV rows persist sync metadata in `dendron_id`, `notion_url`, and `last_synced` columns.
 - CSV sync requires `mapping[]` plus `destination.kind` and `destination.id`. Legacy `fmToSync` is not supported for CSV rules.
 - `syncIdColumn` is optional for CSV rules. When provided, that source column becomes the preferred create/update identity and is persisted into `dendron_id`.
-- `--operation update` never creates new Notion pages. Rows without an existing match are skipped.
-- `--columns` filters CSV mappings by `fromName` or `toName`, while still preserving sync metadata updates.
+- `--operation update` never creates new Notion pages. Unsynced markdown notes and unmatched CSV rows are skipped.
+- `--columns` filters markdown `fmToSync` entries by `name` or `target`, and filters CSV mappings by `fromName` or `toName`.
 - If a CSV row does not provide `dendron_id` or `id`, the CLI generates a deterministic `dendron_id` from the rule name plus mapped source values.
 - Multiple CSV mappings with `toType: body` are appended in mapping order, joined by a blank line.
 - `toType: file/image` appends media blocks after the page body is synced.
@@ -173,22 +174,21 @@ Notes:
 Examples:
 
 ```bash
-node dist/notion.js sync --from md
-node dist/notion.js sync --from md ./notes/task.2025.12.28.finalize-trip.md
-node dist/notion.js sync --from md --dry-run
-node dist/notion.js sync --from md --rule task
-node dist/notion.js sync --from md --rules-dir ./syncRules
-node dist/notion.js sync --from csv ./exports/tasks.csv
-node dist/notion.js sync --from csv --path ../exports
-node dist/notion.js sync --from csv --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv
+node dist/notion.js sync
+node dist/notion.js sync ./notes/task.2025.12.28.finalize-trip.md
+node dist/notion.js sync ./exports/tasks.csv
+node dist/notion.js sync --dry-run
+node dist/notion.js sync --rule task
+node dist/notion.js sync --rules-dir ./syncRules
+node dist/notion.js sync --path ./notes --path ./exports
+node dist/notion.js sync --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv
 ```
 
 Single-note markdown sync:
 
-- `node dist/notion.js sync --from md ./notes/task.2025.12.28.finalize-trip.md` only syncs that one note.
+- `node dist/notion.js sync ./notes/task.2025.12.28.finalize-trip.md` only syncs that one note.
 - The CLI reads the note's YAML frontmatter and markdown body, matches exactly one markdown sync rule by `fname` frontmatter or by the filename stem, then creates or updates the target Notion page.
 - On success, it writes `last_synced` back to frontmatter and stores the page URL in `notion_url` if needed.
-- `node dist/notion.js sync ./notes/task.2025.12.28.finalize-trip.md` is interactive shorthand. Because `--from` is omitted, the CLI prompts for `md` or `csv` first. In non-interactive runs, that shorthand fails and you must pass `--from`.
 
 Markdown sync syntax:
 
@@ -219,11 +219,11 @@ destination:
 How markdown sync works:
 
 1. The CLI loads markdown rules from the rules directory, then filters them by `--rule` if you provided one.
-2. It discovers markdown files from the positional target, `notes/`, the current working directory when `notes/` does not exist, or any extra `--path` roots.
+2. It discovers markdown files from the positional target, explicit `--path` roots, or the default markdown roots when the run is not otherwise ambiguous.
 3. Each note must have YAML frontmatter. The CLI matches `fnameTrigger` against `frontmatter.fname` when present, otherwise the filename stem.
 4. If no rule matches, the note is skipped. If multiple rules match, the command errors.
-5. The CLI treats `frontmatter.notion_url` as the page identity for updates. If `notion_url` is missing, markdown sync creates a new page instead of searching by `dendron_id`.
-6. It maps `fmToSync` fields into Notion properties, and always syncs `dendron_id` from `frontmatter.dendron_id` or `frontmatter.id` plus `last_synced`.
+5. The CLI treats `frontmatter.notion_url` as the page identity for updates. If `notion_url` is missing, markdown sync creates a new page in `--operation sync` and skips the note in `--operation update`.
+6. It maps `fmToSync` fields into Notion properties, optionally filters those fields through `--columns`, and always syncs `dendron_id` from `frontmatter.dendron_id` or `frontmatter.id` plus `last_synced`.
 7. It syncs the entire markdown body as paragraph blocks only. On updates, it replaces all existing blocks except toggle blocks titled `NOTION_ONLY`, which are preserved.
 8. After a successful sync, it writes `last_synced` and `notion_url` back into the note frontmatter.
 
@@ -232,7 +232,7 @@ Markdown vs CSV:
 - Markdown rules use `fmToSync` plus `destination.databaseId`. CSV rules use `mapping[]` plus `destination.kind` and `destination.id`.
 - Markdown sync works at the file level and always syncs the note body. CSV sync works at the row level and only touches the body when a mapping or processor emits `toType: body` or `toType: file/image`.
 - Markdown updates identify an existing page from `notion_url` only. CSV updates check `notion_url` first and then fall back to `dendron_id`.
-- Markdown sync does not support `--operation`, `--columns`, or `--limit`. Those flags are CSV-only.
+- `--operation`, `--columns`, and `--limit` apply to both source types, but keep their existing CSV meanings and map onto markdown records by file and `fmToSync` entry.
 - Markdown sync does not support per-field processors or file/image mappings. CSV sync supports both.
 
 CSV sync syntax:
@@ -269,7 +269,7 @@ destination:
 How CSV sync works:
 
 1. The CLI loads all CSV rules from the rules directory, then filters them by `--rule` if you provided one.
-2. It discovers CSV files from the positional target, `--path`, or the current working directory.
+2. It discovers CSV files from the positional target, explicit `--path` roots, or the default CSV roots when the run is not otherwise ambiguous.
 3. For each row, it chooses the rule by matching `fnameTrigger` against `row.fname` when present, otherwise the CSV filename stem.
 4. If no rule matches, the row is skipped. If multiple rules match, the command errors.
 5. The CLI computes `dendron_id` from `syncIdColumn`, else existing `dendron_id` or `id`, else a deterministic hash of the mapped values.

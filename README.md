@@ -54,8 +54,8 @@ notion lookup "project alpha" --filter object:page --sort last_edited_time:desce
 # Fetch pages from a database
 notion fetch --database-id <db-id> --query "urgent" --output md
 
-# Sync notes using rules
-notion sync --from md --dry-run
+# Sync notes or CSV exports using rules
+notion sync --dry-run
 ```
 
 Full CLI reference lives in `scripts/notion/USAGE.md`.

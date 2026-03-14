@@ -6,6 +6,7 @@ const {
   getSyncFieldMappings,
   getCsvRowSyncId,
   buildCsvSyncPayload,
+  discoverSyncSources,
 } = require('../commands/sync');
 
 function createTempRulesWorkspace() {
@@ -18,6 +19,16 @@ function writeRuleFile(root, name, content) {
   const filePath = path.join(root, name);
   fs.writeFileSync(filePath, content, 'utf8');
   return filePath;
+}
+
+function withWorkingDirectory(nextCwd, callback) {
+  const originalCwd = process.cwd();
+  process.chdir(nextCwd);
+  try {
+    return callback();
+  } finally {
+    process.chdir(originalCwd);
+  }
 }
 
 describe('sync command helpers', () => {
@@ -218,6 +229,108 @@ destination:
       { fromName: 'Name', toName: 'Title' },
       { fromName: 'Status', toName: 'Status' },
     ]);
+  });
+
+  test('filters markdown mappings to selected columns for update operations', () => {
+    const rule = {
+      fmToSync: [
+        { name: 'title', target: 'Name' },
+        { name: 'proj', target: 'Project' },
+        { name: 'priority' },
+      ],
+    };
+
+    expect(getSyncFieldMappings(rule, {}, 'md', new Set(['Name', 'priority']))).toEqual([
+      { name: 'title', target: 'Name' },
+      { name: 'priority' },
+    ]);
+  });
+
+  test('discovers mixed markdown and csv sources for explicit directories', () => {
+    const workspace = createTempRulesWorkspace();
+
+    try {
+      const notesDir = path.join(workspace.root, 'notes');
+      fs.mkdirSync(notesDir, { recursive: true });
+      const notePath = path.join(notesDir, 'task.one.md');
+      const csvPath = path.join(workspace.root, 'task.two.csv');
+      fs.writeFileSync(notePath, '---\nid: one\nfname: task.one\n---\nbody\n', 'utf8');
+      fs.writeFileSync(csvPath, 'Name\nRow\n', 'utf8');
+
+      const sources = withWorkingDirectory(workspace.root, () =>
+        discoverSyncSources({
+          target: null,
+          extraPaths: ['.'],
+          rules: [{ sourceFormat: 'md' }, { sourceFormat: 'csv' }],
+        })
+      );
+
+      expect(sources).toHaveLength(2);
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          { sourceFormat: 'md', filePath: fs.realpathSync(notePath) },
+          { sourceFormat: 'csv', filePath: fs.realpathSync(csvPath) },
+        ])
+      );
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('adds explicit paths on top of default roots', () => {
+    const workspace = createTempRulesWorkspace();
+
+    try {
+      const notesDir = path.join(workspace.root, 'notes');
+      const extraDir = path.join(workspace.root, 'extra');
+      fs.mkdirSync(notesDir, { recursive: true });
+      fs.mkdirSync(extraDir, { recursive: true });
+      const notePath = path.join(notesDir, 'task.one.md');
+      const csvPath = path.join(extraDir, 'task.two.csv');
+      fs.writeFileSync(notePath, '---\nid: one\nfname: task.one\n---\nbody\n', 'utf8');
+      fs.writeFileSync(csvPath, 'Name\nRow\n', 'utf8');
+
+      const sources = withWorkingDirectory(workspace.root, () =>
+        discoverSyncSources({
+          target: null,
+          extraPaths: ['./extra'],
+          rules: [{ sourceFormat: 'md' }, { sourceFormat: 'csv' }],
+        })
+      );
+
+      expect(sources).toHaveLength(2);
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          { sourceFormat: 'md', filePath: fs.realpathSync(notePath) },
+          { sourceFormat: 'csv', filePath: fs.realpathSync(csvPath) },
+        ])
+      );
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  test('errors when default discovery finds both markdown and csv sources', () => {
+    const workspace = createTempRulesWorkspace();
+
+    try {
+      const notesDir = path.join(workspace.root, 'notes');
+      fs.mkdirSync(notesDir, { recursive: true });
+      fs.writeFileSync(path.join(notesDir, 'task.one.md'), '---\nid: one\nfname: task.one\n---\nbody\n', 'utf8');
+      fs.writeFileSync(path.join(workspace.root, 'task.two.csv'), 'Name\nRow\n', 'utf8');
+
+      expect(() =>
+        withWorkingDirectory(workspace.root, () =>
+          discoverSyncSources({
+            target: null,
+            extraPaths: [],
+            rules: [{ sourceFormat: 'md' }, { sourceFormat: 'csv' }],
+          })
+        )
+      ).toThrow(/Ambiguous default sync scope/);
+    } finally {
+      workspace.cleanup();
+    }
   });
 
   test('builds csv payload with ordered body fragments and default toName', async () => {
