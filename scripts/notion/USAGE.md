@@ -183,6 +183,69 @@ node dist/notion.js sync --from csv --path ../exports
 node dist/notion.js sync --from csv --operation update --columns Status,Priority --limit 10 ./exports/tasks.csv
 ```
 
+Single-note markdown sync:
+
+- `node dist/notion.js sync --from md ./notes/task.2025.12.28.finalize-trip.md` only syncs that one note.
+- The CLI reads the note's YAML frontmatter and markdown body, matches exactly one markdown sync rule by `fname` frontmatter or by the filename stem, then creates or updates the target Notion page.
+- On success, it writes `last_synced` back to frontmatter and stores the page URL in `notion_url` if needed.
+- `node dist/notion.js sync ./notes/task.2025.12.28.finalize-trip.md` is interactive shorthand. Because `--from` is omitted, the CLI prompts for `md` or `csv` first. In non-interactive runs, that shorthand fails and you must pass `--from`.
+
+Markdown sync syntax:
+
+- A markdown rule must define `fnameTrigger`, `fmToSync[]`, and `destination.databaseId`.
+- Each `fmToSync` entry starts with `name`, the frontmatter field to read.
+- Use `target` to map that frontmatter field into a Notion property with a different name.
+- Use `mode: append` for merge-style writes on properties that support it, such as `multi_select` and `relation`.
+- Use `type: relation` with `databaseName` or `databaseId` to resolve relation values by page title instead of passing raw Notion IDs.
+- `errorIfNotFound: true` makes relation sync fail when the related page does not exist. Otherwise the CLI creates missing relation pages during a real sync.
+
+Markdown rule example:
+
+```yaml
+fnameTrigger: "task.*"
+fmToSync:
+  - name: title
+    target: Name
+  - name: proj
+    target: Project
+    type: relation
+    databaseName: "Projects"
+    errorIfNotFound: true
+    mode: replace
+destination:
+  databaseId: "your-database-id"
+```
+
+How markdown sync works:
+
+1. The CLI loads markdown rules from the rules directory, then filters them by `--rule` if you provided one.
+2. It discovers markdown files from the positional target, `notes/`, the current working directory when `notes/` does not exist, or any extra `--path` roots.
+3. Each note must have YAML frontmatter. The CLI matches `fnameTrigger` against `frontmatter.fname` when present, otherwise the filename stem.
+4. If no rule matches, the note is skipped. If multiple rules match, the command errors.
+5. The CLI treats `frontmatter.notion_url` as the page identity for updates. If `notion_url` is missing, markdown sync creates a new page instead of searching by `dendron_id`.
+6. It maps `fmToSync` fields into Notion properties, and always syncs `dendron_id` from `frontmatter.dendron_id` or `frontmatter.id` plus `last_synced`.
+7. It syncs the entire markdown body as paragraph blocks only. On updates, it replaces all existing blocks except toggle blocks titled `NOTION_ONLY`, which are preserved.
+8. After a successful sync, it writes `last_synced` and `notion_url` back into the note frontmatter.
+
+Markdown vs CSV:
+
+- Markdown rules use `fmToSync` plus `destination.databaseId`. CSV rules use `mapping[]` plus `destination.kind` and `destination.id`.
+- Markdown sync works at the file level and always syncs the note body. CSV sync works at the row level and only touches the body when a mapping or processor emits `toType: body` or `toType: file/image`.
+- Markdown updates identify an existing page from `notion_url` only. CSV updates check `notion_url` first and then fall back to `dendron_id`.
+- Markdown sync does not support `--operation`, `--columns`, or `--limit`. Those flags are CSV-only.
+- Markdown sync does not support per-field processors or file/image mappings. CSV sync supports both.
+
+CSV sync syntax:
+
+- A CSV rule must define `fnameTrigger`, `mapping[]`, and `destination`.
+- `destination.kind` must be `db` and `destination.id` must be the destination Notion database ID.
+- Each `mapping` entry starts with `fromName`, the CSV column to read.
+- Use `toName` to map that column into a Notion property with a different name.
+- Use `toType: body` to append the column value to the page body instead of a property.
+- Use `toType: file/image` to append a file or image block after the body sync.
+- Use `process` to run a custom JS transformer before mapping. The processor can return a property value, a body fragment, or deferred file uploads.
+- `syncIdColumn` is optional. When present, that column becomes the preferred stable row identity and is copied into `dendron_id`.
+
 CSV rule example:
 
 ```yaml
@@ -202,6 +265,19 @@ destination:
   kind: db
   id: "your-database-id"
 ```
+
+How CSV sync works:
+
+1. The CLI loads all CSV rules from the rules directory, then filters them by `--rule` if you provided one.
+2. It discovers CSV files from the positional target, `--path`, or the current working directory.
+3. For each row, it chooses the rule by matching `fnameTrigger` against `row.fname` when present, otherwise the CSV filename stem.
+4. If no rule matches, the row is skipped. If multiple rules match, the command errors.
+5. The CLI computes `dendron_id` from `syncIdColumn`, else existing `dendron_id` or `id`, else a deterministic hash of the mapped values.
+6. It looks for an existing Notion page by `notion_url` first, then by `dendron_id`.
+7. Property mappings write into Notion properties. `toType: body` mappings are joined with blank lines into the page body.
+8. `toType: file/image` mappings and processor uploads are appended as file or image blocks after the page body sync.
+9. In `--operation sync`, rows create pages when no existing page is found. In `--operation update`, unmatched rows are skipped instead.
+10. After a successful sync, the CLI writes `dendron_id`, `notion_url`, and `last_synced` back into the CSV file.
 
 CSV processor contract:
 

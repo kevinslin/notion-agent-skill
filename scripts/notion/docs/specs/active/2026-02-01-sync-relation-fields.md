@@ -59,8 +59,8 @@ Sync rules currently only support relation properties by providing Notion page I
 ## Steps
 
 ### Phase 1: Plan & Setup
-- [x] Add gitignore entries for `*-progress.md` and `*-learnings.md`.
-- [x] Create progress/learnings files for this plan.
+- [x] Treat `.agents/` as the runtime area and keep spec progress/learnings under `.agents/runs/`.
+- [x] Create progress/learnings files for this plan under `.agents/runs/`.
 
 ### Phase 2: Implement Relation Resolution
 - [x] Extend schema cache to include relation database IDs.

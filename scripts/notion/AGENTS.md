@@ -1,6 +1,5 @@
-# CLAUDE.md
-
 This is a CLI for working with notion
+When updating CLI, also update USAGE.md
 
 ## Commands
 
